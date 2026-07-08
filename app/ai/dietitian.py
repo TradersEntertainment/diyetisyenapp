@@ -24,13 +24,27 @@ SUMMARIZE_BATCH = 50
 
 FALLBACK_TEXT = "Şu an yanıt üretemedim, birazdan tekrar dener misin? 🙏"
 
+SILENT_SENTINEL = "[SESSIZ]"
 
-def _system_blocks(user_context: str) -> list[dict]:
+
+def _system_blocks(user_context: str, *, group_mode: bool = False, speaker: str = "") -> list[dict]:
     """Frozen persona (cached) + volatile per-user context (after the cache breakpoint)."""
-    return [
+    blocks = [
         {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": "# KULLANICI BAĞLAMI\n\n" + user_context},
     ]
+    if group_mode:
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    "# ORTAM\nBu konuşma ikisinin de içinde olduğu ortak Telegram grubunda geçiyor. "
+                    f"Şu an yazan kişi: {speaker}. Yanıtın gruba gidecek; {speaker} ismiyle hitap et. "
+                    "Mesaj sana yönelik değilse ve katkın gerekmiyorsa sadece [SESSIZ] yaz."
+                ),
+            }
+        )
+    return blocks
 
 
 async def _load_history(session: AsyncSession, user_id: int) -> list[dict]:
@@ -44,8 +58,12 @@ async def _load_history(session: AsyncSession, user_id: int) -> list[dict]:
     return [{"role": r.role, "content": r.content} for r in rows if r.content.strip()]
 
 
-async def chat(session: AsyncSession, user: User, text: str) -> str:
-    """One conversational turn: log data via tools, reply in Turkish."""
+async def chat(session: AsyncSession, user: User, text: str, *, group_mode: bool = False) -> str:
+    """One conversational turn: log data via tools, reply in Turkish.
+
+    In group_mode the model may answer with SILENT_SENTINEL to stay out of a
+    conversation between the two humans; the caller then sends nothing.
+    """
     client = get_client()
     context = await build_user_context(session, user)
     history = await _load_history(session, user.id)
@@ -59,7 +77,7 @@ async def chat(session: AsyncSession, user: User, text: str) -> str:
         response = await client.messages.create(
             model=get_model(),
             max_tokens=8000,
-            system=_system_blocks(context),
+            system=_system_blocks(context, group_mode=group_mode, speaker=user.name or "kullanıcı"),
             tools=TOOLS,
             messages=messages,
         )
@@ -93,7 +111,12 @@ async def chat(session: AsyncSession, user: User, text: str) -> str:
 
 
 async def generate_message(
-    session: AsyncSession, user: User, instruction: str, *, include_context: bool = True
+    session: AsyncSession,
+    user: User,
+    instruction: str,
+    *,
+    include_context: bool = True,
+    group_mode: bool = False,
 ) -> str:
     """One-shot Turkish message (greetings, reports, motivational nudges). No tools."""
     client = get_client()
@@ -103,6 +126,16 @@ async def generate_message(
     if include_context:
         context = await build_user_context(session, user)
         system.append({"type": "text", "text": "# KULLANICI BAĞLAMI\n\n" + context})
+    if group_mode:
+        system.append(
+            {
+                "type": "text",
+                "text": (
+                    "# ORTAM\nBu mesaj ikisinin de içinde olduğu ortak Telegram grubuna gidecek. "
+                    f"Mesaj {user.name or 'kullanıcı'} için; ona ismiyle hitap et ki kime yazdığın belli olsun."
+                ),
+            }
+        )
     try:
         response = await client.messages.create(
             model=get_model(),

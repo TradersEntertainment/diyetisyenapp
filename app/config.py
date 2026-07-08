@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     # NoDecode: keep the raw "1,2" string so the validator below splits it
     # (otherwise pydantic-settings tries to JSON-parse the comma list and fails).
     allowed_telegram_ids: Annotated[list[int], NoDecode] = []
+    # Shared group chat id. Optional: normally auto-detected from the first
+    # group message and persisted in the DB; set to force a specific group.
+    group_chat_id: int | None = None
 
     # Anthropic
     anthropic_api_key: str = ""

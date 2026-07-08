@@ -53,17 +53,51 @@ async def get_or_create_user(update: Update) -> User:
         return user
 
 
+def _is_group(update: Update) -> bool:
+    chat = update.effective_chat
+    return bool(chat and chat.type in ("group", "supergroup"))
+
+
+async def _capture_group(update: Update) -> None:
+    """Remember the shared group's chat id the first time we see it."""
+    from app.services.group import set_group_chat_id
+
+    try:
+        async with session_scope() as session:
+            await set_group_chat_id(session, update.effective_chat.id)
+    except Exception:
+        log.exception("failed to store group chat id")
+
+
 async def guard_allowlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Group -1 gate: silently reject anyone not in ALLOWED_TELEGRAM_IDS."""
     from telegram.ext import ApplicationHandlerStop
 
     tg = update.effective_user
     if tg is None or tg.id not in get_settings().allowed_telegram_ids:
-        if update.effective_chat:
+        # In the shared group strangers are ignored silently; in DMs we reply once.
+        if update.effective_chat and not _is_group(update):
             await update.effective_chat.send_message(
                 "Üzgünüm, bu asistan kişisel kullanım içindir. 🙏"
             )
         raise ApplicationHandlerStop
+
+    if _is_group(update):
+        await _capture_group(update)
+
+
+async def on_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Greet the household when the bot itself is added to the shared group."""
+    members = update.message.new_chat_members if update.message else []
+    if not any(m.id == context.bot.id for m in members):
+        return
+    await _capture_group(update)
+    await update.effective_chat.send_message(
+        "Merhaba! Ben sizin diyetisyeninizim, artık buradayım. 🌱\n\n"
+        "Bundan sonra ikinizle de bu gruptan konuşacağım: tartı sonuçlarınızı soracağım, "
+        "planlarınızı buraya atacağım, gününüzü takip edeceğim.\n\n"
+        "Tanışmadığımız kişi /start yazsın, hemen başlayalım! 👇"
+    )
 
 
 def _require_active(user: User | None) -> str | None:
@@ -529,18 +563,22 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text or ""
     if not text.strip():
         return
+    group_mode = _is_group(update)
 
     await update.effective_chat.send_action(ChatAction.TYPING)
 
-    from app.ai.dietitian import chat
+    from app.ai.dietitian import SILENT_SENTINEL, chat
 
     try:
         async with session_scope() as session:
             res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
             user = res.scalar_one()
-            reply = await chat(session, user, text)
+            reply = await chat(session, user, text, group_mode=group_mode)
     except Exception:
         log.exception("chat failed")
         reply = "Bir aksaklık oldu, mesajını birazdan tekrar yazar mısın? 🙏"
+    if SILENT_SENTINEL in reply and len(reply.strip()) <= len(SILENT_SENTINEL) + 4:
+        return  # the dietitian chose to stay out of a human-to-human exchange
     for i in range(0, len(reply), 4000):
-        await update.message.reply_text(reply[i : i + 4000])
+        # In the group, quote the message being answered so it's clear who it's for.
+        await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)

@@ -79,6 +79,9 @@ def create_application() -> Application:
     application.add_handler(CallbackQueryHandler(handlers.cb_grafik, pattern=r"^grafik:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_ayar, pattern=r"^ayar:"))
 
+    application.add_handler(
+        MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handlers.on_new_chat_members)
+    )
     application.add_handler(MessageHandler(filters.PHOTO, handlers.photo_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.chat_handler))
 

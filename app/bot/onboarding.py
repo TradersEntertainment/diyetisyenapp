@@ -218,32 +218,42 @@ DEFAULT_REMINDERS = [
 ]
 
 
-def _question_markup(q: Q, selected: set[str] | None = None) -> InlineKeyboardMarkup | None:
+def _question_markup(q: Q, uid: int, selected: set[str] | None = None) -> InlineKeyboardMarkup | None:
+    # uid is baked into callback_data so that, in the shared group, two people
+    # onboarding at the same time can't press each other's buttons.
     if q.kind == "choice":
         return InlineKeyboardMarkup(
-            [[InlineKeyboardButton(label, callback_data=f"onb:{value}")] for value, label in q.options]
+            [[InlineKeyboardButton(label, callback_data=f"onb:{uid}:{value}")] for value, label in q.options]
         )
     if q.kind == "multi":
         selected = selected or set()
         rows = [
             [
                 InlineKeyboardButton(
-                    ("✅ " if value in selected else "☐ ") + label, callback_data=f"onbm:{value}"
+                    ("✅ " if value in selected else "☐ ") + label, callback_data=f"onbm:{uid}:{value}"
                 )
             ]
             for value, label in q.options
         ]
-        rows.append([InlineKeyboardButton("➡️ Devam", callback_data="onbm:__done__")])
+        rows.append([InlineKeyboardButton("➡️ Devam", callback_data=f"onbm:{uid}:__done__")])
         return InlineKeyboardMarkup(rows)
     return None
+
+
+def _in_group(update: Update) -> bool:
+    chat = update.effective_chat
+    return bool(chat and chat.type in ("group", "supergroup"))
 
 
 async def _ask_current(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = False):
     idx = context.user_data["onb_idx"]
     q = QUESTIONS[idx]
     total = len(QUESTIONS)
-    text = f"({idx + 1}/{total}) {q.text}"
-    markup = _question_markup(q, context.user_data.get("onb_multi"))
+    # In the group, prefix with the person's name so it's clear who is being asked.
+    name = context.user_data.get("onb_name") or ""
+    prefix = f"{name} — " if name and _in_group(update) else ""
+    text = f"({idx + 1}/{total}) {prefix}{q.text}"
+    markup = _question_markup(q, update.effective_user.id, context.user_data.get("onb_multi"))
     if edit and update.callback_query:
         await update.callback_query.edit_message_text(text, reply_markup=markup)
     else:
@@ -256,8 +266,11 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["onb_answers"] = {}
     context.user_data["onb_prefs"] = []
     context.user_data["onb_multi"] = set()
+    context.user_data["onb_name"] = update.effective_user.first_name or ""
+    first_name = update.effective_user.first_name or ""
+    greeting = f"Merhaba {first_name}! " if first_name else "Merhaba! "
     await update.effective_chat.send_message(
-        "Merhaba! Ben senin kişisel diyetisyeninim. 🌱\n\n"
+        greeting + "Ben senin kişisel diyetisyeninim. 🌱\n\n"
         "Sana gerçekten uyan bir beslenme planı için önce seni tanımam gerekiyor. "
         "Sorular biraz detaylı ama hepsini bir kere cevaplıyorsun — her şeyi kalıcı olarak hatırlayacağım.\n\n"
         "Hazırsan başlıyoruz! 👇"
@@ -312,17 +325,28 @@ async def handle_text_answer(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
-    await query.answer()
-    idx = context.user_data.get("onb_idx", 0)
-    q = QUESTIONS[idx]
     data = query.data
 
-    if data.startswith("onb:") and q.kind == "choice":
-        context.user_data["onb_answers"][q.key] = data.split(":", 1)[1]
+    # callback_data is "onb:{uid}:{value}" / "onbm:{uid}:{value}"
+    try:
+        prefix, uid_s, value = data.split(":", 2)
+        owner_id = int(uid_s)
+    except ValueError:
+        await query.answer()
+        return ASKING
+    if query.from_user.id != owner_id:
+        await query.answer("Bu soru sana değil 🙂")
+        return ASKING
+    await query.answer()
+
+    idx = context.user_data.get("onb_idx", 0)
+    q = QUESTIONS[idx]
+
+    if prefix == "onb" and q.kind == "choice":
+        context.user_data["onb_answers"][q.key] = value
         return await _advance(update, context, edited=True)
 
-    if data.startswith("onbm:") and q.kind == "multi":
-        value = data.split(":", 1)[1]
+    if prefix == "onbm" and q.kind == "multi":
         selected: set[str] = context.user_data.setdefault("onb_multi", set())
         if value == "__done__":
             context.user_data["onb_answers"][q.key] = sorted(selected)

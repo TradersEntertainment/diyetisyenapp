@@ -138,6 +138,29 @@ async def _today_plan_text(session: AsyncSession, user_id: int, today: date) -> 
     return "\n".join(lines)
 
 
+async def _partner_brief(session: AsyncSession, user: User, today: date) -> str:
+    """One-paragraph summary of the housemate, so the dietitian can reason about
+    shared dinners and address both people naturally in the group."""
+    res = await session.execute(
+        select(User).where(User.id != user.id, User.onboarding_state == "active")
+    )
+    partner = res.scalars().first()
+    if not partner:
+        return ""
+    parts = [f"İsim: {partner.name or 'bilinmiyor'}"]
+    profile = await get_profile(session, partner.id)
+    if profile:
+        goal = primary_goal_of(profile)
+        if goal:
+            parts.append(f"ana hedefi: {goal}")
+    weight = await latest_weight(session, partner.id)
+    if weight:
+        parts.append(f"güncel kilo: {weight:g} kg")
+    facts = await daily_facts(session, partner, today)
+    parts.append(f"bugün: {facts['kcal_total']} kcal, {facts['water_ml']} ml su")
+    return ", ".join(parts)
+
+
 async def build_user_context(session: AsyncSession, user: User) -> str:
     """The full grounding document for one user."""
     now = datetime.now(timezone.utc)
@@ -201,5 +224,9 @@ async def build_user_context(session: AsyncSession, user: User) -> str:
     memory = await _memory_text(session, user.id)
     if memory:
         sections.append("## Hafıza Notları\n" + memory)
+
+    partner = await _partner_brief(session, user, today)
+    if partner:
+        sections.append("## Ev Arkadaşı (diğer kullanıcı)\n" + partner)
 
     return "\n\n".join(sections)

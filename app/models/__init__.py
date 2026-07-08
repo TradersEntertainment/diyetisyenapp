@@ -1,4 +1,4 @@
-from app.models.conversation import ConversationMessage, MemoryNote
+from app.models.conversation import AppSetting, ConversationMessage, MemoryNote
 from app.models.nutrition import (
     Food,
     MealLog,
@@ -24,6 +24,7 @@ from app.models.tracking import (
 from app.models.user import Profile, ReminderSetting, User
 
 __all__ = [
+    "AppSetting",
     "BodyCompositionLog",
     "BodyMeasurement",
     "ConversationMessage",
