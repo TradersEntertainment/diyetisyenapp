@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-diyetisyen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-diyetisyen}
+      POSTGRES_DB: ${POSTGRES_DB:-diyetisyen}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-diyetisyen}:${POSTGRES_PASSWORD:-diyetisyen}@db:5432/${POSTGRES_DB:-diyetisyen}
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backups:/srv/diyetisyen/backups
+      - ./logs:/srv/diyetisyen/logs
+
+volumes:
+  pgdata:

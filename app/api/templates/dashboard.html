@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diyetisyen — Kontrol Paneli</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --teal:#2b7a78; --bg:#f5f7f7; --card:#ffffff; --ink:#17252a; --danger:#c0392b; --muted:#667; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--teal); color:#fff; padding:14px 22px; display:flex; align-items:center; gap:16px; flex-wrap:wrap; position:sticky; top:0; z-index:20; }
+  header h1 { font-size:1.15rem; margin:0; }
+  .usertabs button { background:transparent; border:1px solid rgba(255,255,255,.5); color:#fff; border-radius:20px; padding:6px 16px; margin-right:8px; cursor:pointer; font-size:.85rem; }
+  .usertabs button.active { background:#fff; color:var(--teal); font-weight:600; }
+  nav.sections { display:flex; gap:6px; padding:10px 22px; background:#fff; border-bottom:1px solid #e2e8e8; flex-wrap:wrap; position:sticky; top:56px; z-index:19; }
+  nav.sections button { background:none; border:none; padding:8px 14px; border-radius:8px; cursor:pointer; font-size:.85rem; color:var(--ink); }
+  nav.sections button.active { background:var(--teal); color:#fff; }
+  main { padding:20px; max-width:1200px; margin:0 auto; }
+  section.panel { display:none; }
+  section.panel.active { display:block; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:20px; }
+  .card { background:var(--card); border-radius:12px; padding:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); }
+  .card .label { font-size:.75rem; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .card .value { font-size:1.4rem; font-weight:700; margin-top:4px; }
+  .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(340px,1fr)); gap:16px; }
+  .chartbox, .box { background:var(--card); border-radius:12px; padding:14px; box-shadow:0 1px 4px rgba(0,0,0,.06); margin-bottom:16px; }
+  .chartbox h3, .box h3 { margin:0 0 8px; font-size:.95rem; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; }
+  th, td { border:1px solid #e2e8e8; padding:6px 8px; text-align:left; vertical-align:top; }
+  th { background:#eef4f4; }
+  .overflow-x { overflow-x:auto; }
+  form.grid-form { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:10px; }
+  form.grid-form label { display:flex; flex-direction:column; font-size:.75rem; color:var(--muted); gap:4px; }
+  input, select, textarea { padding:6px 8px; border:1px solid #ccd6d6; border-radius:6px; font-size:.85rem; font-family:inherit; }
+  button.btn { background:var(--teal); color:#fff; border:none; border-radius:8px; padding:8px 16px; cursor:pointer; font-size:.85rem; }
+  button.btn.secondary { background:#eef4f4; color:var(--ink); }
+  button.btn.danger { background:var(--danger); }
+  button.btn:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:12px; font-size:.72rem; background:#eef4f4; }
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--ink); color:#fff; padding:10px 16px; border-radius:8px; opacity:0; transition:opacity .3s; z-index:50; }
+  .toast.show { opacity:1; }
+  .warn { color:#b8860b; font-weight:600; }
+  .small { font-size:.78rem; color:var(--muted); }
+  .checklist label { display:flex; gap:8px; align-items:center; padding:4px 0; }
+  #tab-users .box { max-width:520px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🥗 Diyetisyen — Kontrol Paneli</h1>
+  <div class="usertabs" id="userTabs"></div>
+</header>
+<nav class="sections" id="sectionNav">
+  <button data-tab="overview" class="active">📊 Genel Bakış</button>
+  <button data-tab="profile">👤 Profil</button>
+  <button data-tab="targets">🎯 Hedefler</button>
+  <button data-tab="logs">📝 Kayıtlar</button>
+  <button data-tab="prefs">🍽 Tercihler</button>
+  <button data-tab="plan">📅 Plan</button>
+  <button data-tab="shopping">🛒 Alışveriş</button>
+  <button data-tab="reminders">⏰ Hatırlatmalar</button>
+  <button data-tab="users">👥 Kullanıcılar</button>
+</nav>
+<main>
+
+  <section class="panel active" id="tab-overview">
+    <div class="cards" id="cards"></div>
+    <div class="charts">
+      <div class="chartbox"><h3>⚖️ Kilo</h3><canvas id="c_weight"></canvas></div>
+      <div class="chartbox"><h3>📉 Yağ %</h3><canvas id="c_fat"></canvas></div>
+      <div class="chartbox"><h3>💪 Kas (kg)</h3><canvas id="c_muscle"></canvas></div>
+      <div class="chartbox"><h3>🔥 Kalori</h3><canvas id="c_kcal"></canvas></div>
+      <div class="chartbox"><h3>🍗 Protein (g)</h3><canvas id="c_protein"></canvas></div>
+      <div class="chartbox"><h3>💧 Su (ml)</h3><canvas id="c_water"></canvas></div>
+      <div class="chartbox"><h3>😴 Uyku (saat)</h3><canvas id="c_sleep"></canvas></div>
+      <div class="chartbox"><h3>🏃 Egzersiz (dk)</h3><canvas id="c_exercise"></canvas></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-profile">
+    <div class="box">
+      <h3>👤 Profili Düzenle</h3>
+      <form class="grid-form" id="profileForm"></form>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="saveProfile()">Kaydet</button>
+        <span class="small" id="profileStatus"></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-targets">
+    <div class="box">
+      <h3>🎯 Güncel Hedefler</h3>
+      <div id="currentTargets" class="small"></div>
+    </div>
+    <div class="box">
+      <h3>✏️ Manuel Düzenleme</h3>
+      <p class="small">Protein tabanı vücut analizinden hesaplanır ve <b>asla düşürülemez</b> — altında bir değer girersen otomatik olarak tabana yükseltilir.</p>
+      <form class="grid-form" id="targetForm">
+        <label>Kalori (kcal) <input type="number" name="kcal"></label>
+        <label>Protein (g) <input type="number" name="protein_g"></label>
+        <label>Karbonhidrat (g) <input type="number" name="carb_g"></label>
+        <label>Yağ (g) <input type="number" name="fat_g"></label>
+        <label>Lif (g) <input type="number" name="fiber_g"></label>
+        <label>Su (ml) <input type="number" name="water_ml"></label>
+        <label>Diyet Stratejisi <input type="text" name="diet_strategy" placeholder="örn: dengeli"></label>
+        <label>Gerekçe <input type="text" name="reason" placeholder="isteğe bağlı"></label>
+      </form>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onclick="saveTargetOverride()">Hedefleri Güncelle</button>
+        <span class="small" id="targetStatus"></span>
+      </div>
+    </div>
+    <div class="box">
+      <h3>🕓 Hedef Geçmişi</h3>
+      <div class="overflow-x"><table id="targetHistoryTable"><thead><tr>
+        <th>Tarih</th><th>Kcal</th><th>Protein</th><th>Karb</th><th>Yağ</th><th>Lif</th><th>Su</th><th>Strateji</th><th>Gerekçe</th>
+      </tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-logs">
+    <div class="box">
+      <h3>📝 Kayıt Türü</h3>
+      <div class="row">
+        <select id="logKindSelect"></select>
+        <button class="btn secondary" onclick="loadLogs()">Yenile</button>
+      </div>
+      <div id="logAddForm" style="margin-top:12px"></div>
+      <div class="row" style="margin-top:8px"><button class="btn" onclick="addLog()">Ekle</button></div>
+    </div>
+    <div class="box">
+      <div class="overflow-x"><table id="logsTable"><thead><tr id="logsTableHead"></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-prefs">
+    <div class="box">
+      <h3>🍽 Yeni / Güncelle</h3>
+      <div class="row">
+        <input type="text" id="prefName" placeholder="Yiyecek adı">
+        <select id="prefLevel">
+          <option value="bayilirim">Bayılırım</option>
+          <option value="severim">Severim</option>
+          <option value="yiyebilirim">Yiyebilirim</option>
+          <option value="sevmem">Sevmem</option>
+          <option value="asla">Asla</option>
+        </select>
+        <select id="prefCategory">
+          <option value="genel">Genel</option>
+          <option value="sebze">Sebze</option>
+          <option value="meyve">Meyve</option>
+          <option value="et">Et</option>
+          <option value="tatli">Tatlı</option>
+          <option value="icecek">İçecek</option>
+          <option value="atistirmalik">Atıştırmalık</option>
+          <option value="kahvalti">Kahvaltı</option>
+          <option value="aksam">Akşam</option>
+          <option value="restoran">Restoran</option>
+          <option value="kacamak">Kaçamak</option>
+          <option value="mutfak">Mutfak</option>
+        </select>
+        <button class="btn" onclick="savePref()">Kaydet</button>
+      </div>
+    </div>
+    <div class="box">
+      <div class="overflow-x"><table id="prefsTable"><thead><tr><th>Yiyecek</th><th>Seviye</th><th>Kategori</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-plan">
+    <div class="box">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="margin:0">📅 Bu Haftanın Planı</h3>
+        <button class="btn" id="regenBtn" onclick="regeneratePlan()">🔄 Yeni Plan Oluştur</button>
+      </div>
+      <p class="small" id="regenStatus"></p>
+    </div>
+    <div class="box overflow-x" id="planBox"></div>
+  </section>
+
+  <section class="panel" id="tab-shopping">
+    <div class="box">
+      <h3>🛒 Ortak Alışveriş Listesi</h3>
+      <div id="shoppingList" class="checklist"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-reminders">
+    <div class="box">
+      <h3>⏰ Yeni Hatırlatma</h3>
+      <div class="row">
+        <input type="text" id="remKind" placeholder="kind (örn: su_4)">
+        <input type="time" id="remTime">
+        <button class="btn" onclick="addReminder()">Ekle</button>
+      </div>
+    </div>
+    <div class="box">
+      <div class="overflow-x"><table id="remindersTable"><thead><tr><th>Tür</th><th>Saat</th><th>Aktif</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section class="panel" id="tab-users">
+    <div class="box">
+      <h3>➕ Yeni Kullanıcı</h3>
+      <div class="row">
+        <input type="number" id="newTgId" placeholder="Telegram ID">
+        <input type="text" id="newName" placeholder="İsim">
+        <button class="btn" onclick="createUser()">Ekle</button>
+      </div>
+      <p class="small">Not: Yeni kullanıcının profil/hedef bilgilerini "Profil" ve "Hedefler" sekmelerinden ya da Telegram üzerinden /start ile tamamlaman gerekir.</p>
+    </div>
+    <div class="box">
+      <div class="overflow-x"><table id="usersTable"><thead><tr><th>ID</th><th>İsim</th><th>Telegram ID</th><th>Durum</th><th></th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const TOKEN = new URLSearchParams(location.search).get("token") || "";
+let currentUserId = null;
+let charts = {};
+
+function toast(msg, isError) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.style.background = isError ? "#c0392b" : "#17252a";
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+async function api(path, opts = {}) {
+  const url = path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN);
+  const res = await fetch(url, {
+    ...opts,
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (res.status === 401) { document.body.innerHTML = "<p style='padding:40px'>Geçersiz token. URL: /?token=DASHBOARD_TOKEN</p>"; throw new Error("unauthorized"); }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "İstek başarısız");
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+// ---------------- section nav ----------------
+document.getElementById("sectionNav").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-tab]");
+  if (!btn) return;
+  document.querySelectorAll("nav.sections button").forEach(b => b.classList.toggle("active", b === btn));
+  document.querySelectorAll("section.panel").forEach(s => s.classList.toggle("active", s.id === "tab-" + btn.dataset.tab));
+  loadTab(btn.dataset.tab);
+});
+
+async function loadTab(tab) {
+  if (!currentUserId) return;
+  try {
+    if (tab === "overview") await loadOverview();
+    else if (tab === "profile") await loadProfile();
+    else if (tab === "targets") await loadTargets();
+    else if (tab === "logs") await loadLogKinds();
+    else if (tab === "prefs") await loadPrefs();
+    else if (tab === "plan") await loadPlan();
+    else if (tab === "shopping") await loadShopping();
+    else if (tab === "reminders") await loadReminders();
+    else if (tab === "users") await loadUsersTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- overview ----------------
+function drawLine(id, points, label, target) {
+  const ctx = document.getElementById(id);
+  if (charts[id]) charts[id].destroy();
+  const datasets = [{ label, data: points.map(p => ({x: p.date, y: p.value})), borderColor: "#2b7a78", backgroundColor: "rgba(43,122,120,.15)", tension: .25, fill: true }];
+  if (target) datasets.push({ label: "Hedef", data: points.map(p => ({x: p.date, y: target})), borderColor: "#d95f5f", borderDash: [6,4], pointRadius: 0 });
+  charts[id] = new Chart(ctx, { type: "line", data: { datasets },
+    options: { parsing: false, scales: { x: { type: "category" } }, plugins: { legend: { display: !!target } } } });
+}
+
+async function loadOverview() {
+  const s = await api(`/api/users/${currentUserId}/summary`);
+  const t = s.targets || {};
+  const st = s.stats || {};
+  const cards = [
+    ["Kalori Hedefi", (t.kcal ?? "—") + " kcal"],
+    ["Protein Hedefi", (t.protein_g ?? "—") + " g"],
+    ["Strateji", t.diet_strategy ?? "—"],
+    ["Kilo Trendi", st.weight_change_kg_per_week != null ? st.weight_change_kg_per_week.toFixed(2) + " kg/hf" : "—"],
+    ["Beslenme Uyumu", st.nutrition_adherence != null ? "%" + st.nutrition_adherence : "—"],
+    ["Su Uyumu", st.water_adherence != null ? "%" + st.water_adherence : "—"],
+    ["Egzersiz Uyumu", st.exercise_adherence != null ? "%" + st.exercise_adherence : "—"],
+  ];
+  document.getElementById("cards").innerHTML = cards.map(([l, v]) =>
+    `<div class="card"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+
+  const [w, f, m, k, p, wa, sl, ex] = await Promise.all([
+    api(`/api/users/${currentUserId}/series/weight?days=120`),
+    api(`/api/users/${currentUserId}/series/fat?days=180`),
+    api(`/api/users/${currentUserId}/series/muscle?days=180`),
+    api(`/api/users/${currentUserId}/series/kcal?days=21`),
+    api(`/api/users/${currentUserId}/series/protein?days=21`),
+    api(`/api/users/${currentUserId}/series/water?days=21`),
+    api(`/api/users/${currentUserId}/series/sleep?days=21`),
+    api(`/api/users/${currentUserId}/series/exercise?days=30`),
+  ]);
+  drawLine("c_weight", w, "kg");
+  drawLine("c_fat", f, "%");
+  drawLine("c_muscle", m, "kg");
+  drawLine("c_kcal", k, "kcal", t.kcal);
+  drawLine("c_protein", p, "g", t.protein_g);
+  drawLine("c_water", wa, "ml", t.water_ml);
+  drawLine("c_sleep", sl, "saat");
+  drawLine("c_exercise", ex, "dk");
+}
+
+// ---------------- profile ----------------
+const PROFILE_FIELDS = [
+  ["age", "Yaş", "number"], ["gender", "Cinsiyet (kadin/erkek)", "text"], ["height_cm", "Boy (cm)", "number"],
+  ["start_weight_kg", "Başlangıç Kilo (kg)", "number"], ["goal_weight_kg", "Hedef Kilo (kg)", "number"],
+  ["body_fat_pct", "Yağ Oranı (%)", "number"], ["muscle_mass_kg", "Kas Kütlesi (kg)", "number"],
+  ["waist_cm", "Bel (cm)", "number"], ["hip_cm", "Kalça (cm)", "number"], ["neck_cm", "Boyun (cm)", "number"],
+  ["activity_level", "Aktivite (sedanter/hafif_aktif/orta_aktif/aktif/cok_aktif)", "text"],
+  ["occupation", "Meslek", "text"], ["sleep_hours", "Uyku (saat)", "number"],
+  ["has_diabetes", "Diyabet", "checkbox"], ["has_thyroid", "Tiroid", "checkbox"],
+  ["has_insulin_resistance", "İnsülin Direnci", "checkbox"], ["has_hypertension", "Tansiyon", "checkbox"],
+  ["has_cholesterol", "Kolesterol", "checkbox"], ["has_digestive_issues", "Sindirim Sorunu", "checkbox"],
+  ["allergies", "Alerjiler", "text"], ["intolerances", "İntoleranslar", "text"],
+  ["medications", "İlaçlar", "text"], ["supplements", "Takviyeler", "text"],
+  ["exercise_frequency_per_week", "Haftalık Egzersiz (gün)", "number"],
+  ["exercise_duration_min", "Seans Süresi (dk)", "number"],
+  ["cooking_skill", "Mutfak Becerisi (yok/temel/iyi/cok_iyi)", "text"],
+  ["monthly_food_budget", "Aylık Bütçe", "text"], ["shopping_preferences", "Alışveriş Tercihi", "text"],
+];
+
+async function loadProfile() {
+  const p = await api(`/api/users/${currentUserId}/profile`) || {};
+  const form = document.getElementById("profileForm");
+  form.innerHTML = PROFILE_FIELDS.map(([key, label, type]) => {
+    const val = p[key];
+    if (type === "checkbox") {
+      return `<label><input type="checkbox" name="${key}" ${val ? "checked" : ""}> ${label}</label>`;
+    }
+    return `<label>${label}<input type="${type}" name="${key}" value="${val ?? ""}"></label>`;
+  }).join("");
+}
+
+async function saveProfile() {
+  const form = document.getElementById("profileForm");
+  const body = {};
+  for (const [key, , type] of PROFILE_FIELDS) {
+    const el = form.elements[key];
+    if (!el) continue;
+    if (type === "checkbox") body[key] = el.checked;
+    else if (el.value !== "") body[key] = type === "number" ? Number(el.value) : el.value;
+  }
+  try {
+    await api(`/api/users/${currentUserId}/profile`, { method: "PATCH", body });
+    document.getElementById("profileStatus").textContent = "Kaydedildi ✓";
+    toast("Profil güncellendi");
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- targets ----------------
+async function loadTargets() {
+  const data = await api(`/api/users/${currentUserId}/targets`);
+  const t = data.targets;
+  const floor = data.protein_floor_g;
+  document.getElementById("currentTargets").innerHTML = t
+    ? `Kalori: <b>${t.kcal}</b> kcal | Protein: <b>${t.protein_g} g</b> (taban: ${floor ?? "—"} g) | `
+      + `Karb: ${t.carb_g} g | Yağ: ${t.fat_g} g | Lif: ${t.fiber_g} g | Su: ${t.water_ml} ml<br>`
+      + `Strateji: <i>${t.diet_strategy}</i> — ${t.reason || ""}`
+    : `Henüz hedef yok. Protein tabanı: ${floor ?? "— (kilo/profil eksik)"}`;
+
+  if (t) {
+    const form = document.getElementById("targetForm");
+    for (const k of ["kcal","protein_g","carb_g","fat_g","fiber_g","water_ml"]) form.elements[k].placeholder = t[k];
+    form.elements.diet_strategy.placeholder = t.diet_strategy;
+  }
+
+  const hist = await api(`/api/users/${currentUserId}/targets/history?limit=20`);
+  document.querySelector("#targetHistoryTable tbody").innerHTML = hist.map(h => `<tr>
+    <td>${h.effective_date}</td><td>${h.kcal}</td><td>${h.protein_g}</td><td>${h.carb_g}</td>
+    <td>${h.fat_g}</td><td>${h.fiber_g}</td><td>${h.water_ml}</td><td>${h.diet_strategy}</td>
+    <td class="small">${h.reason || ""}</td></tr>`).join("");
+}
+
+async function saveTargetOverride() {
+  const form = document.getElementById("targetForm");
+  const body = {};
+  for (const k of ["kcal","protein_g","carb_g","fat_g","fiber_g","water_ml"]) {
+    if (form.elements[k].value !== "") body[k] = Number(form.elements[k].value);
+  }
+  if (form.elements.diet_strategy.value) body.diet_strategy = form.elements.diet_strategy.value;
+  if (form.elements.reason.value) body.reason = form.elements.reason.value;
+  try {
+    const res = await api(`/api/users/${currentUserId}/targets/override`, { method: "POST", body });
+    document.getElementById("targetStatus").innerHTML = res.protein_clamped_to_floor
+      ? `<span class="warn">⚠️ Girdiğin protein değeri tabanın (${res.protein_floor_g} g) altındaydı, tabana yükseltildi.</span>`
+      : "Kaydedildi ✓";
+    toast("Hedefler güncellendi");
+    await loadTargets();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- logs ----------------
+let LOG_KINDS = {};
+const LOG_KIND_LABELS = {
+  weight: "Kilo", water: "Su", meal: "Öğün", sleep: "Uyku", mood: "Ruh Hali",
+  hunger: "Açlık", exercise: "Egzersiz", bodycomp: "Vücut Analizi", measurement: "Ölçüler",
+};
+const FIELD_LABELS = {
+  weight_kg: "Kilo (kg)", amount_ml: "Miktar (ml)", description: "Açıklama", kcal: "Kalori",
+  protein_g: "Protein (g)", carb_g: "Karb (g)", fat_g: "Yağ (g)", fiber_g: "Lif (g)",
+  slot: "Öğün", is_cheat: "Kaçamak", hours: "Saat", quality: "Kalite (1-5)", mood: "Ruh Hali (1-5)",
+  stress: "Stres (1-5)", energy: "Enerji (1-5)", note: "Not", hunger: "Açlık (1-5)", craving: "İstek",
+  activity: "Aktivite", duration_min: "Süre (dk)", intensity: "Yoğunluk", body_fat_pct: "Yağ %",
+  muscle_mass_kg: "Kas (kg)", waist_cm: "Bel (cm)", hip_cm: "Kalça (cm)", neck_cm: "Boyun (cm)",
+};
+
+async function loadLogKinds() {
+  LOG_KINDS = await api("/api/log-kinds");
+  const sel = document.getElementById("logKindSelect");
+  sel.innerHTML = Object.keys(LOG_KINDS).map(k => `<option value="${k}">${LOG_KIND_LABELS[k] || k}</option>`).join("");
+  sel.onchange = () => { renderLogAddForm(); loadLogs(); };
+  renderLogAddForm();
+  await loadLogs();
+}
+
+function renderLogAddForm() {
+  const kind = document.getElementById("logKindSelect").value;
+  const fields = LOG_KINDS[kind] || [];
+  document.getElementById("logAddForm").innerHTML = `<div class="row">` + fields.map(f => {
+    if (f === "is_cheat") return `<label class="small"><input type="checkbox" data-field="${f}"> ${FIELD_LABELS[f]}</label>`;
+    const numeric = !["description","slot","note","craving","activity","intensity"].includes(f);
+    return `<input type="${numeric ? "number" : "text"}" step="any" data-field="${f}" placeholder="${FIELD_LABELS[f] || f}">`;
+  }).join("") + `</div>`;
+}
+
+async function loadLogs() {
+  const kind = document.getElementById("logKindSelect").value;
+  const fields = LOG_KINDS[kind] || [];
+  document.getElementById("logsTableHead").innerHTML =
+    "<th>Tarih</th>" + fields.map(f => `<th>${FIELD_LABELS[f] || f}</th>`).join("") + "<th></th>";
+  const rows = await api(`/api/users/${currentUserId}/logs/${kind}`);
+  document.querySelector("#logsTable tbody").innerHTML = rows.map(r => {
+    const cells = fields.map(f => {
+      const val = r[f];
+      if (typeof val === "boolean") return `<td><input type="checkbox" ${val ? "checked" : ""} onchange="updateLogField('${kind}',${r.id},'${f}',this.checked)"></td>`;
+      const numeric = !["description","slot","note","craving","activity","intensity"].includes(f);
+      return `<td><input type="${numeric ? "number" : "text"}" step="any" value="${val ?? ""}" style="width:90px"
+        onchange="updateLogField('${kind}',${r.id},'${f}', ${numeric ? "Number(this.value)" : "this.value"})"></td>`;
+    }).join("");
+    return `<tr><td class="small">${new Date(r.ts).toLocaleString("tr-TR")}</td>${cells}
+      <td><button class="btn danger" onclick="deleteLog('${kind}',${r.id})">Sil</button></td></tr>`;
+  }).join("");
+}
+
+async function updateLogField(kind, id, field, value) {
+  try {
+    await api(`/api/logs/${kind}/${id}`, { method: "PATCH", body: { fields: { [field]: value } } });
+    toast("Güncellendi");
+  } catch (e) { toast(e.message, true); await loadLogs(); }
+}
+
+async function addLog() {
+  const kind = document.getElementById("logKindSelect").value;
+  const inputs = document.querySelectorAll("#logAddForm [data-field]");
+  const fields = {};
+  inputs.forEach(el => {
+    const f = el.dataset.field;
+    if (el.type === "checkbox") fields[f] = el.checked;
+    else if (el.value !== "") fields[f] = el.type === "number" ? Number(el.value) : el.value;
+  });
+  try {
+    await api(`/api/users/${currentUserId}/logs/${kind}`, { method: "POST", body: { fields } });
+    toast("Kayıt eklendi");
+    await loadLogs();
+    if (kind === "weight" || kind === "bodycomp") await loadTargets();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteLog(kind, id) {
+  if (!confirm("Bu kaydı silmek istediğinden emin misin?")) return;
+  try {
+    await api(`/api/logs/${kind}/${id}`, { method: "DELETE" });
+    toast("Silindi");
+    await loadLogs();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- preferences ----------------
+async function loadPrefs() {
+  const rows = await api(`/api/users/${currentUserId}/preferences`);
+  document.querySelector("#prefsTable tbody").innerHTML = rows.map(p => `<tr>
+    <td>${p.name}</td><td><span class="pill">${p.level}</span></td><td>${p.category}</td>
+    <td><button class="btn danger" onclick="deletePref(${p.id})">Sil</button></td></tr>`).join("");
+}
+
+async function savePref() {
+  const name = document.getElementById("prefName").value.trim();
+  if (!name) return toast("Yiyecek adı gerekli", true);
+  const level = document.getElementById("prefLevel").value;
+  const category = document.getElementById("prefCategory").value;
+  try {
+    await api(`/api/users/${currentUserId}/preferences`, { method: "POST", body: { name, level, category } });
+    document.getElementById("prefName").value = "";
+    toast("Tercih kaydedildi");
+    await loadPrefs();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deletePref(id) {
+  try { await api(`/api/preferences/${id}`, { method: "DELETE" }); await loadPrefs(); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ---------------- plan ----------------
+async function loadPlan() {
+  const plan = await api(`/api/users/${currentUserId}/plan`);
+  const days = ["Pzt","Sal","Çar","Per","Cum","Cmt","Paz"];
+  const slots = {kahvalti:"Kahvaltı", ara_ogun_1:"Ara 1", ogle:"Öğle", ara_ogun_2:"Ara 2", aksam:"Akşam", gece_atistirmasi:"Gece"};
+  let html = `<h3>Strateji: ${plan.strategy || "—"}</h3>`;
+  if (!plan.days.length || plan.days.every(d => !d.meals.length)) {
+    html += "<p>Bu hafta için plan yok. Yukarıdaki butonla oluşturabilirsin.</p>";
+  } else {
+    html += "<table><tr><th>Gün</th>" + Object.values(slots).map(s => `<th>${s}</th>`).join("") + "</tr>";
+    for (const d of plan.days) {
+      html += `<tr><td><b>${days[d.day_index]}</b></td>`;
+      for (const slot of Object.keys(slots)) {
+        const meal = d.meals.find(m => m.slot === slot);
+        html += `<td>${meal ? meal.name + `<br><small>${meal.kcal} kcal · P${meal.protein_g}</small>` : ""}</td>`;
+      }
+      html += "</tr>";
+    }
+    html += "</table>";
+  }
+  document.getElementById("planBox").innerHTML = html;
+}
+
+async function regeneratePlan() {
+  const btn = document.getElementById("regenBtn");
+  btn.disabled = true;
+  document.getElementById("regenStatus").textContent = "Plan oluşturuluyor, bu birkaç dakika sürebilir... ⏳";
+  try {
+    await api(`/api/users/${currentUserId}/plan/regenerate`, { method: "POST" });
+    document.getElementById("regenStatus").textContent = "Plan hazır ✓";
+    toast("Yeni plan oluşturuldu");
+    await loadPlan();
+  } catch (e) {
+    document.getElementById("regenStatus").textContent = "";
+    toast(e.message, true);
+  } finally { btn.disabled = false; }
+}
+
+// ---------------- shopping ----------------
+async function loadShopping() {
+  const data = await api("/api/shopping");
+  const cats = {};
+  data.items.forEach(i => (cats[i.category] = cats[i.category] || []).push(i));
+  document.getElementById("shoppingList").innerHTML = Object.entries(cats).map(([cat, items]) =>
+    `<h4>${cat}</h4>` + items.map(i => `<label>
+      <input type="checkbox" ${i.checked ? "checked" : ""} onchange="toggleShoppingItem(${i.id}, this.checked)">
+      ${i.name} ${i.quantity ? "— " + i.quantity : ""}
+    </label>`).join("")
+  ).join("") || "<p class='small'>Liste boş.</p>";
+}
+
+async function toggleShoppingItem(id, checked) {
+  try { await api(`/api/shopping/items/${id}`, { method: "PATCH", body: { checked } }); }
+  catch (e) { toast(e.message, true); await loadShopping(); }
+}
+
+// ---------------- reminders ----------------
+async function loadReminders() {
+  const rows = await api(`/api/users/${currentUserId}/reminders`);
+  document.querySelector("#remindersTable tbody").innerHTML = rows.map(r => `<tr>
+    <td>${r.kind}</td>
+    <td><input type="time" value="${r.time}" onchange="updateReminder(${r.id}, {time: this.value})"></td>
+    <td><input type="checkbox" ${r.enabled ? "checked" : ""} onchange="updateReminder(${r.id}, {enabled: this.checked})"></td>
+    <td><button class="btn danger" onclick="deleteReminder(${r.id})">Sil</button></td></tr>`).join("");
+}
+
+async function updateReminder(id, body) {
+  try { await api(`/api/reminders/${id}`, { method: "PATCH", body }); toast("Güncellendi"); }
+  catch (e) { toast(e.message, true); await loadReminders(); }
+}
+
+async function deleteReminder(id) {
+  try { await api(`/api/reminders/${id}`, { method: "DELETE" }); await loadReminders(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function addReminder() {
+  const kind = document.getElementById("remKind").value.trim();
+  const time = document.getElementById("remTime").value;
+  if (!kind || !time) return toast("Tür ve saat gerekli", true);
+  try {
+    await api(`/api/users/${currentUserId}/reminders`, { method: "POST", body: { kind, time } });
+    document.getElementById("remKind").value = "";
+    toast("Hatırlatma eklendi");
+    await loadReminders();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- users management ----------------
+async function loadUsersTable() {
+  const rows = await api("/api/users?include_inactive=true");
+  document.querySelector("#usersTable tbody").innerHTML = rows.map(u => `<tr>
+    <td>${u.id}</td>
+    <td><input type="text" value="${u.name}" style="width:100px" onchange="updateUser(${u.id}, {name: this.value})"></td>
+    <td>${u.telegram_id}</td>
+    <td>
+      <select onchange="updateUser(${u.id}, {onboarding_state: this.value})">
+        <option value="new" ${u.onboarding_state === "new" ? "selected" : ""}>new</option>
+        <option value="active" ${u.onboarding_state === "active" ? "selected" : ""}>active</option>
+        <option value="paused" ${u.onboarding_state === "paused" ? "selected" : ""}>paused</option>
+      </select>
+    </td>
+    <td><button class="btn danger" onclick="deleteUserRow(${u.id})">Sil</button></td></tr>`).join("");
+}
+
+async function updateUser(id, body) {
+  try { await api(`/api/users/${id}`, { method: "PATCH", body }); toast("Güncellendi"); await refreshUserTabs(); }
+  catch (e) { toast(e.message, true); }
+}
+
+async function deleteUserRow(id) {
+  if (!confirm("Bu kullanıcıyı ve TÜM verilerini kalıcı olarak silmek istediğine emin misin?")) return;
+  try {
+    await api(`/api/users/${id}`, { method: "DELETE" });
+    toast("Kullanıcı silindi");
+    await refreshUserTabs();
+    await loadUsersTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function createUser() {
+  const telegram_id = Number(document.getElementById("newTgId").value);
+  const name = document.getElementById("newName").value.trim();
+  if (!telegram_id) return toast("Telegram ID gerekli", true);
+  try {
+    await api("/api/users", { method: "POST", body: { telegram_id, name } });
+    document.getElementById("newTgId").value = "";
+    document.getElementById("newName").value = "";
+    toast("Kullanıcı oluşturuldu");
+    await refreshUserTabs();
+    await loadUsersTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------------- user tabs / bootstrap ----------------
+async function refreshUserTabs() {
+  const users = await api("/api/users?include_inactive=true");
+  const tabs = document.getElementById("userTabs");
+  tabs.innerHTML = users.map(u => `<button data-id="${u.id}">${u.name || ("Kullanıcı " + u.id)}</button>`).join("");
+  tabs.querySelectorAll("button").forEach(b => b.onclick = () => selectUser(b.dataset.id));
+  if (!users.find(u => String(u.id) === String(currentUserId)) && users.length) {
+    currentUserId = users[0].id;
+  }
+  document.querySelectorAll("#userTabs button").forEach(b => b.classList.toggle("active", b.dataset.id == currentUserId));
+}
+
+async function selectUser(id) {
+  currentUserId = id;
+  document.querySelectorAll("#userTabs button").forEach(b => b.classList.toggle("active", b.dataset.id == id));
+  const activeTab = document.querySelector("nav.sections button.active")?.dataset.tab || "overview";
+  await loadTab(activeTab);
+}
+
+(async function init() {
+  try {
+    await refreshUserTabs();
+    if (currentUserId) await loadTab("overview");
+    else toast("Henüz kullanıcı yok — Kullanıcılar sekmesinden ekleyebilirsin.");
+  } catch (e) { /* handled in api() for 401 */ }
+})();
+</script>
+</body>
+</html>
