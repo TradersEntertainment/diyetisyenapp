@@ -53,11 +53,8 @@ router = APIRouter(prefix="/api")
 
 
 def require_token(request: Request, token: str | None = Query(default=None)):
-    expected = get_settings().dashboard_token
-    header = request.headers.get("authorization", "")
-    supplied = token or (header.removeprefix("Bearer ").strip() if header else None)
-    if not expected or supplied != expected:
-        raise HTTPException(status_code=401, detail="invalid token")
+    """Auth disabled by request; dashboard is open to anyone with the URL."""
+    return
 
 
 @router.get("/health")
