@@ -269,11 +269,18 @@ async def start_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data["onb_name"] = update.effective_user.first_name or ""
     first_name = update.effective_user.first_name or ""
     greeting = f"Merhaba {first_name}! " if first_name else "Merhaba! "
+    group_note = (
+        "\n\n⚠️ Anket bitene kadar bu gruba yazdığın her mesajı cevap olarak alacağım; "
+        "aranızda konuşacaksanız anketi bitirdikten sonra devam edelim. (Yarıda bırakmak için /iptal)"
+        if _in_group(update)
+        else ""
+    )
     await update.effective_chat.send_message(
         greeting + "Ben senin kişisel diyetisyeninim. 🌱\n\n"
         "Sana gerçekten uyan bir beslenme planı için önce seni tanımam gerekiyor. "
-        "Sorular biraz detaylı ama hepsini bir kere cevaplıyorsun — her şeyi kalıcı olarak hatırlayacağım.\n\n"
-        "Hazırsan başlıyoruz! 👇"
+        "Sorular biraz detaylı ama hepsini bir kere cevaplıyorsun — her şeyi kalıcı olarak hatırlayacağım."
+        + group_note
+        + "\n\nHazırsan başlıyoruz! 👇"
     )
     await _ask_current(update, context)
     return ASKING
@@ -441,8 +448,10 @@ async def _finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         session.add(WeightLog(user_id=user.id, weight_kg=profile.start_weight_kg))
 
     bf_line = f"• Yağ oranı: %{body_fat:g}\n" if body_fat else ""
+    display_name = answers.get("name") or update.effective_user.first_name or ""
+    who = f"{display_name}, harika" if _in_group(update) and display_name else "Harika"
     await update.effective_chat.send_message(
-        "Harika, tanıştığımıza memnun oldum! 🎉 İşte başlangıç hedeflerin:\n\n"
+        f"{who}, tanıştığımıza memnun oldum! 🎉 İşte başlangıç hedeflerin:\n\n"
         f"• Kalori: {targets.kcal} kcal/gün\n"
         f"• Protein: {targets.protein_g} g/gün  (taban: {targets.protein_floor_g} g — bunun altına asla inmeyiz 💪)\n"
         f"• Karbonhidrat: {targets.carb_g} g | Yağ: {targets.fat_g} g | Lif: {targets.fiber_g} g\n"

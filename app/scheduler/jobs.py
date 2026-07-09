@@ -222,8 +222,12 @@ async def daily_care(application: Application) -> None:
     from app.models import WeightLog
 
     async with session_scope() as session:
-        for user in await _active_users(session):
-            try:
+        users = await _active_users(session)
+
+    for user in users:
+        # One session per user: a failure for one must not poison the other's check.
+        try:
+            async with session_scope() as session:
                 _, is_group = await _resolve_chat(session, user)
                 facts = await daily_facts(session, user)
                 res = await session.execute(
@@ -254,8 +258,8 @@ async def daily_care(application: Application) -> None:
                 if not text or SILENT_SENTINEL in text:
                     continue
                 await _send(application, session, user, text)
-            except Exception:
-                log.exception("daily care failed for user %s", user.id)
+        except Exception:
+            log.exception("daily care failed for user %s", user.id)
 
 
 # ------------------------------------------------------------------ weekly review

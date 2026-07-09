@@ -74,6 +74,12 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("foto", handlers.cmd_foto))
     application.add_handler(CommandHandler("ayarlar", handlers.cmd_ayarlar))
 
+    # Fallback for onboarding buttons pressed by someone without an active
+    # conversation (e.g. the partner tapping the other's question): the
+    # ConversationHandler above won't consume those, so answer the callback
+    # here to avoid an endless loading spinner on their client.
+    application.add_handler(CallbackQueryHandler(handlers.cb_onboarding_foreign, pattern=r"^onbm?:"))
+
     application.add_handler(CallbackQueryHandler(handlers.cb_shopping, pattern=r"^shop:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_rapor, pattern=r"^rapor:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_grafik, pattern=r"^grafik:"))

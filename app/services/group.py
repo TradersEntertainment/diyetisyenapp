@@ -28,24 +28,40 @@ async def get_group_chat_id(session: AsyncSession) -> int | None:
     global _cached_id, _cache_loaded
     if not _cache_loaded:
         row = await session.get(AppSetting, GROUP_KEY)
-        _cached_id = int(row.value) if row else None
-        _cache_loaded = True
+        # Re-check after the await: a concurrent writer may have just set the
+        # cache; its fresh value must not be clobbered with our older snapshot.
+        if not _cache_loaded:
+            _cached_id = int(row.value) if row else None
+            _cache_loaded = True
     return _cached_id
 
 
-async def set_group_chat_id(session: AsyncSession, chat_id: int) -> bool:
-    """Persist a newly seen group chat id. Returns True when it changed."""
-    global _cached_id, _cache_loaded
-    if _cache_loaded and _cached_id == chat_id:
+async def set_group_chat_id(session: AsyncSession, chat_id: int, *, force: bool = False) -> bool:
+    """Write a group chat id to the DB. Returns True when a write happened.
+
+    The first discovered group is sticky: without force, an already-stored id is
+    never overwritten (so the bot casually seeing another group can't hijack
+    routing). force=True is for deliberate acts like adding the bot to a group.
+
+    NOTE: this only stages the DB write; call confirm_group_cache() after the
+    surrounding transaction commits so a failed commit can be retried later.
+    """
+    current = await get_group_chat_id(session)
+    if current == chat_id:
+        return False
+    if current is not None and not force:
         return False
     row = await session.get(AppSetting, GROUP_KEY)
-    changed = row is None or row.value != str(chat_id)
     if row is None:
         session.add(AppSetting(key=GROUP_KEY, value=str(chat_id)))
     else:
         row.value = str(chat_id)
+    return True
+
+
+def confirm_group_cache(chat_id: int) -> None:
+    """Update the in-memory cache once the DB write is safely committed."""
+    global _cached_id, _cache_loaded
     _cached_id = chat_id
     _cache_loaded = True
-    if changed:
-        log.info("shared group chat id set to %s", chat_id)
-    return changed
+    log.info("shared group chat id set to %s", chat_id)

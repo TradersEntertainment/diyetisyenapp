@@ -58,13 +58,17 @@ def _is_group(update: Update) -> bool:
     return bool(chat and chat.type in ("group", "supergroup"))
 
 
-async def _capture_group(update: Update) -> None:
+async def _capture_group(update: Update, *, force: bool = False) -> None:
     """Remember the shared group's chat id the first time we see it."""
-    from app.services.group import set_group_chat_id
+    from app.services.group import confirm_group_cache, set_group_chat_id
 
     try:
         async with session_scope() as session:
-            await set_group_chat_id(session, update.effective_chat.id)
+            changed = await set_group_chat_id(session, update.effective_chat.id, force=force)
+        # Only reached when the transaction committed; a failed commit leaves the
+        # cache untouched so the next update retries the write.
+        if changed:
+            confirm_group_cache(update.effective_chat.id)
     except Exception:
         log.exception("failed to store group chat id")
 
@@ -86,12 +90,18 @@ async def guard_allowlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _capture_group(update)
 
 
+async def cb_onboarding_foreign(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Onboarding button tapped by someone who isn't in that questionnaire."""
+    await update.callback_query.answer("Bu soru sana değil 🙂")
+
+
 async def on_new_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Greet the household when the bot itself is added to the shared group."""
     members = update.message.new_chat_members if update.message else []
     if not any(m.id == context.bot.id for m in members):
         return
-    await _capture_group(update)
+    # Being added to a group is a deliberate act: adopt it even over an old id.
+    await _capture_group(update, force=True)
     await update.effective_chat.send_message(
         "Merhaba! Ben sizin diyetisyeninizim, artık buradayım. 🌱\n\n"
         "Bundan sonra ikinizle de bu gruptan konuşacağım: tartı sonuçlarınızı soracağım, "
@@ -565,7 +575,10 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     group_mode = _is_group(update)
 
-    await update.effective_chat.send_action(ChatAction.TYPING)
+    # No typing indicator in the group: the dietitian may choose to stay silent
+    # there, and "typing... then nothing" on every human-to-human message is creepy.
+    if not group_mode:
+        await update.effective_chat.send_action(ChatAction.TYPING)
 
     from app.ai.dietitian import SILENT_SENTINEL, chat
 
