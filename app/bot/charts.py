@@ -90,9 +90,17 @@ def plan_image(
     target_kcal: int | None = None,
     target_protein: float | None = None,
 ) -> io.BytesIO | None:
-    """Render a weekly meal plan as a hi-res PNG grid: 7 days x 6 slots with
-    per-meal portions and daily totals."""
+    """Render a weekly meal plan as a hi-res PNG grid.
+
+    Row heights are computed from the wrapped text so portions and names are
+    NEVER truncated, no matter how long they get.
+    """
     import textwrap
+
+    NAME_W, PORTION_W = 26, 34
+    LH_NAME, LH_PORTION = 0.30, 0.26
+    GAP, MACRO_H, PAD = 0.10, 0.30, 0.16
+    MIN_ROW_H = 1.6
 
     by_day: dict[int, dict] = {}
     for d in days_data:
@@ -100,11 +108,26 @@ def plan_image(
     if not by_day:
         return None
 
-    col_w = [1.1] + [3.0] * len(SLOT_LABELS) + [1.4]
+    # Pre-wrap every cell and derive each day-row's height from its tallest cell.
+    wrapped: dict[tuple[int, str], tuple[list[str], list[str]]] = {}
+    day_heights: list[float] = []
+    for di in range(len(DAY_NAMES)):
+        tallest = MIN_ROW_H
+        for slot, _ in SLOT_LABELS:
+            m = by_day.get(di, {}).get(slot)
+            if not m:
+                continue
+            name_lines = textwrap.wrap(m.get("name", ""), NAME_W) or [""]
+            portion_lines = textwrap.wrap((m.get("portion") or "").strip(), PORTION_W)
+            wrapped[(di, slot)] = (name_lines, portion_lines)
+            h = PAD + len(name_lines) * LH_NAME + GAP + len(portion_lines) * LH_PORTION + GAP + MACRO_H + PAD
+            tallest = max(tallest, h)
+        day_heights.append(tallest)
+
     header_h = 0.8
-    row_h = 2.2  # room for name (2) + portion (3) + macros (1) lines
+    col_w = [1.1] + [3.0] * len(SLOT_LABELS) + [1.4]
     width = sum(col_w)
-    height = header_h + len(DAY_NAMES) * row_h
+    height = header_h + sum(day_heights)
 
     fig, ax = plt.subplots(figsize=(width * 0.95, height * 0.6 + 0.7), dpi=150)
     ax.set_xlim(0, width)
@@ -122,15 +145,14 @@ def plan_image(
     x_edges = [0.0]
     for w in col_w:
         x_edges.append(x_edges[-1] + w)
-
-    def row_y(row: int) -> tuple[float, float]:
-        if row == 0:
-            return 0.0, header_h
-        return header_h + (row - 1) * row_h, row_h
+    y_edges = [0.0, header_h]
+    for h in day_heights:
+        y_edges.append(y_edges[-1] + h)
 
     def cell_box(row, col, *, bg=None):
         x0, x1 = x_edges[col], x_edges[col + 1]
-        y0, h = row_y(row)
+        y0, y1 = y_edges[row], y_edges[row + 1]
+        h = y1 - y0
         if bg:
             ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, h, facecolor=bg, edgecolor="none", zorder=0))
         ax.add_patch(
@@ -146,19 +168,21 @@ def plan_image(
             fontweight="bold" if bold else "normal", zorder=3, linespacing=1.3,
         )
 
-    def meal_cell(row, col, m, *, bg=None):
+    def meal_cell(row, col, di, slot, m, *, bg=None):
         x0, x1, y0, h = cell_box(row, col, bg=bg)
         cx = (x0 + x1) / 2
-        name = "\n".join(textwrap.wrap(m.get("name", ""), 26)[:2])
-        ax.text(cx, y0 + h * 0.22, name, ha="center", va="center",
+        name_lines, portion_lines = wrapped.get((di, slot), ([m.get("name", "")], []))
+        # Absolute stacking from the top: name, then portion; macros pinned to
+        # the bottom. Nothing can overlap or get cut off.
+        y = y0 + PAD
+        ax.text(cx, y, "\n".join(name_lines), ha="center", va="top",
                 fontsize=8.5, color="#17252a", zorder=3, linespacing=1.25)
-        portion = (m.get("portion") or "").strip()
-        if portion:
-            ptext = "\n".join(textwrap.wrap(portion, 34)[:3])
-            ax.text(cx, y0 + h * 0.58, ptext, ha="center", va="center",
+        y += len(name_lines) * LH_NAME + GAP
+        if portion_lines:
+            ax.text(cx, y, "\n".join(portion_lines), ha="center", va="top",
                     fontsize=7.2, color="#5a6b68", zorder=3, linespacing=1.25)
-        ax.text(cx, y0 + h * 0.88, f"{m.get('kcal', 0)} kcal · P{m.get('protein_g', 0):g}",
-                ha="center", va="center", fontsize=8, color=COLOR,
+        ax.text(cx, y0 + h - PAD, f"{m.get('kcal', 0)} kcal · P{m.get('protein_g', 0):g}",
+                ha="center", va="bottom", fontsize=8, color=COLOR,
                 fontweight="bold", zorder=3)
 
     cell(0, 0, "Gün", bold=True, bg=COLOR, color="white", size=10)
@@ -178,7 +202,7 @@ def plan_image(
             if m:
                 total_kcal += m.get("kcal") or 0
                 total_protein += m.get("protein_g") or 0
-                meal_cell(i, j, m, bg=bg)
+                meal_cell(i, j, di, slot, m, bg=bg)
             else:
                 cell(i, j, "—", bg=bg)
         on_target = target_kcal and abs(total_kcal - target_kcal) <= target_kcal * 0.10
