@@ -57,3 +57,34 @@ async def test_apply_plan_day_rejects_empty_day(session):
     user, _ = await _make_user_with_plan(session)
     result = await execute_tool(session, user, "apply_plan_day_to_week", {"day_index": 5})
     assert "HATA" in result
+
+
+def _plan(*day_meals):
+    return {"days": [{"day_index": i, "meals": [{"name": n} for n in names]} for i, names in enumerate(day_meals)]}
+
+
+def test_single_meat_flags_mixed_day():
+    from app.services.mealplan import validate_plan_single_meat
+
+    plan = _plan(["Hindi Şiş + Atom Salata", "Fırında Levrek + Semizotu"])
+    assert validate_plan_single_meat(plan) == {0: ["balik", "hindi"]}
+
+
+def test_single_meat_deli_and_eggs_exempt():
+    from app.services.mealplan import validate_plan_single_meat
+
+    plan = _plan(
+        ["Hindi Füme Rulo", "Fırında Levrek"],          # füme exempt -> clean
+        ["Lorlu Yumurtasız Menemen", "Izgara Tavuk"],   # yumurta word exempt -> clean
+        ["Izgara Köfte + Cacık", "Dana Bonfile Izgara"],  # same red-meat category -> clean
+    )
+    assert validate_plan_single_meat(plan) == {}
+
+
+def test_single_meat_specific_animal_beats_generic_words():
+    from app.services.mealplan import _meal_meat_category
+
+    assert _meal_meat_category("Marul Sarmalı Hindi Burger Köftesi") == "hindi"
+    assert _meal_meat_category("Kıymalı Kabak Sote") == "kirmizi"
+    assert _meal_meat_category("Ton Balıklı Yeşil Salata") == "balik"
+    assert _meal_meat_category("Çilekli Süzme Yoğurt") is None

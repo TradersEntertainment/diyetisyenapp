@@ -178,6 +178,53 @@ def validate_plan_protein(plan_data: dict, protein_floor: int, tolerance: float 
     return bad
 
 
+# Bumping this constant makes ensure_plans_current() regenerate the household's
+# active plans once after the next deploy (old plans are archived).
+PLAN_RULES_VERSION = "v2-tek-et-ogle-pismez"
+
+# Cooked-meat classification for the one-cooked-meat-per-day rule. Deli meats
+# (füme/salam/...) and eggs are exempt. Meal NAMES only — recipes mention
+# garnishes and would false-positive.
+_MEAT_EXEMPT = ["füme", "fume", "salam", "sosis", "pastırma", "pastirma", "sucuk", "yumurta"]
+_MEAT_SPECIFIC = {
+    "balik": [
+        "balık", "balik", "somon", "levrek", "çipura", "cipura", "hamsi", "ton ",
+        "karides", "kalamar", "midye", "uskumru", "sardalya", "alabalık", "alabalik",
+    ],
+    "hindi": ["hindi"],
+    "tavuk": ["tavuk", "piliç", "pilic"],
+}
+_MEAT_RED = ["dana", "kuzu", "kıyma", "kiyma", "köfte", "kofte", "bonfile", "kuşbaşı", "kusbasi", "pirzola", "biftek", "antrikot", "etli", "et sote"]
+
+
+def _meal_meat_category(name: str) -> str | None:
+    n = " " + (name or "").casefold() + " "
+    if any(word in n for word in _MEAT_EXEMPT):
+        return None  # deli/egg items don't count as cooked meat
+    # A specific animal wins over generic preparation words ("hindi köfte" is
+    # turkey, not red meat).
+    for category, words in _MEAT_SPECIFIC.items():
+        if any(w in n for w in words):
+            return category
+    if any(w in n for w in _MEAT_RED):
+        return "kirmizi"
+    return None
+
+
+def validate_plan_single_meat(plan_data: dict) -> dict[int, list[str]]:
+    """Days that plan more than one cooked-meat type. Returns {day: categories}."""
+    bad: dict[int, list[str]] = {}
+    for day in plan_data.get("days", []):
+        cats: set[str] = set()
+        for m in day.get("meals", []):
+            cat = _meal_meat_category(m.get("name", ""))
+            if cat:
+                cats.add(cat)
+        if len(cats) > 1:
+            bad[day["day_index"]] = sorted(cats)
+    return bad
+
+
 def validate_plan_kcal(plan_data: dict, target_kcal: int, tolerance: float = 0.10) -> list[int]:
     """Return the day_indexes whose total kcal is off the target by > tolerance."""
     bad = []
@@ -247,6 +294,12 @@ ve deniz ürünleri / kırmızı et-kıyma-kuzu türlerinden sadece biri). Öğl
 KOYMA — akşam ya aynı et türünden ya da etsiz/baklagilli olur. Hindi füme, salam gibi hazır
 şarküteri ürünleri ve yumurta bu kurala DAHİL DEĞİLDİR (her gün serbest).
 
+ÖNEMLİ — GÜNDE YALNIZCA BİR KEZ OCAK/FIRIN ÇALIŞIR: sadece AKŞAM yemeği pişirilir. Kahvaltı ve
+öğle PİŞİRME GEREKTİRMEZ: hazır/soğuk tabaklar kullan (lor/peynir tabağı, yoğurt kasesi, salata,
+konserve ton, şarküteri dürüm, SDM Kalibra ürünleri) ya da akşamdan bilerek çift porsiyon pişirilip
+saklanan yemek ('dünün akşamından' diye belirt; et türü o günün tek-et kuralına sayılır).
+Kahvaltı ve öğle için prep_minutes en fazla 10 olsun.
+
 Malzemeleri alışveriş listesi için gerçekçi miktarlarla yaz ve her öğüne 1-2 alternatif ekle.
 
 ## Kişiselleştirme verileri
@@ -279,7 +332,7 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
     client = get_client()
     plan_data: dict | None = None
     feedback = ""
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             async with client.messages.stream(
                 model=get_plan_model(),
@@ -301,12 +354,13 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
 
         bad_protein_days = validate_plan_protein(candidate, protein_floor)
         bad_kcal_days = validate_plan_kcal(candidate, targets_row.kcal)
+        bad_meat_days = validate_plan_single_meat(candidate)
         plan_data = candidate
-        if not bad_protein_days and not bad_kcal_days:
+        if not bad_protein_days and not bad_kcal_days and not bad_meat_days:
             break
         log.warning(
-            "plan for user %s off-target (attempt %s): protein days %s, kcal days %s",
-            user.id, attempt + 1, bad_protein_days, bad_kcal_days,
+            "plan for user %s off-target (attempt %s): protein days %s, kcal days %s, meat days %s",
+            user.id, attempt + 1, bad_protein_days, bad_kcal_days, bad_meat_days,
         )
         problems = []
         if bad_protein_days:
@@ -317,11 +371,16 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
             problems.append(
                 f"şu günlerin toplam kalorisi {targets_row.kcal} kcal hedefinden %10'dan fazla sapıyor: {bad_kcal_days}"
             )
+        if bad_meat_days:
+            listing = "; ".join(f"gün {d}: {', '.join(cats)}" for d, cats in bad_meat_days.items())
+            problems.append(
+                f"şu günlerde birden fazla PİŞEN et türü var ({listing}) — günde tek pişen et türü kuralını ihlal ediyor"
+            )
         feedback = (
             "\n\nÖNEMLİ DÜZELTME: Önceki denemede "
             + "; ".join(problems)
-            + f". Her günün toplamı {targets_row.kcal} kcal (±%10) ve en az {protein_floor} g protein "
-            "olacak şekilde planı yeniden yaz."
+            + f". Her günün toplamı {targets_row.kcal} kcal (±%10), en az {protein_floor} g protein "
+            "ve günde TEK pişen et türü olacak şekilde planı yeniden yaz."
         )
 
     if plan_data is None:

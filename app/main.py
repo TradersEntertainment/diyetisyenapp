@@ -60,6 +60,13 @@ async def lifespan(app: FastAPI):
         scheduler = create_scheduler(bot_app)
         scheduler.start()
         log.info("scheduler started")
+
+        # One-shot: regenerate plans in the background if generation rules changed.
+        import asyncio
+
+        from app.scheduler.jobs import ensure_plans_current
+
+        asyncio.create_task(ensure_plans_current(bot_app))
     else:
         log.warning(
             "TELEGRAM_BOT_TOKEN / ALLOWED_TELEGRAM_IDS not set — running API only (no bot, no scheduler)"

@@ -530,6 +530,42 @@ async def nightly_backup() -> None:
         log.exception("backup job crashed")
 
 
+# ------------------------------------------------------------------ plan rules version
+
+async def ensure_plans_current(application: Application) -> None:
+    """One-shot after deploy: when plan generation rules changed (PLAN_RULES_VERSION
+    bumped), archive & regenerate the household's active plans and post the new
+    tables — no user action needed. No-op on every later restart."""
+    from app.models import AppSetting, MealPlan
+    from app.services.mealplan import PLAN_RULES_VERSION
+
+    try:
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+        async with session_scope() as session:
+            row = await session.get(AppSetting, "plan_rules_version")
+            if row and row.value == PLAN_RULES_VERSION:
+                return
+            users = await _active_users(session)
+            res = await session.execute(
+                select(MealPlan).where(
+                    MealPlan.week_start == week_start, MealPlan.status == "active"
+                ).limit(1)
+            )
+            has_plans = res.scalars().first() is not None
+            primary_tg = users[0].telegram_id if users else None
+            # Record the version first so a crash mid-generation can't loop.
+            if row is None:
+                session.add(AppSetting(key="plan_rules_version", value=PLAN_RULES_VERSION))
+            else:
+                row.value = PLAN_RULES_VERSION
+        if primary_tg and has_plans:
+            log.info("plan rules version changed -> regenerating household plans")
+            await household_regenerate(application, primary_tg)
+    except Exception:
+        log.exception("ensure_plans_current failed")
+
+
 # ------------------------------------------------------------------ household plan regen
 
 
