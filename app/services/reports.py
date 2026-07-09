@@ -45,6 +45,25 @@ async def get_current_targets(session: AsyncSession, user_id: int) -> TargetHist
     return res.scalar_one_or_none()
 
 
+async def logging_streak_days(session: AsyncSession, user_id: int, lookback_days: int = 90) -> int:
+    """Consecutive days with at least one log (meal/weight/water), counted back
+    from today; today not having a log yet doesn't break the streak."""
+    since = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+    logged: set[date] = set()
+    for model in (MealLog, WeightLog, WaterLog):
+        res = await session.execute(
+            select(model.ts).where(model.user_id == user_id, model.ts >= since)
+        )
+        logged.update(ts.date() for ts in res.scalars())
+    today = date.today()
+    streak = 0
+    day = today if today in logged else today - timedelta(days=1)
+    while day in logged:
+        streak += 1
+        day -= timedelta(days=1)
+    return streak
+
+
 async def weight_series(session: AsyncSession, user_id: int, days: int = 90) -> list[tuple[date, float]]:
     since = datetime.now(timezone.utc) - timedelta(days=days)
     res = await session.execute(

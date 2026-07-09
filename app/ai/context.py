@@ -18,7 +18,12 @@ from app.models import (
     User,
 )
 from app.services.calculations import protein_floor_g
-from app.services.reports import daily_facts, gather_weekly_stats, get_current_targets
+from app.services.reports import (
+    daily_facts,
+    gather_weekly_stats,
+    get_current_targets,
+    logging_streak_days,
+)
 from app.services.targets import get_profile, latest_body_fat, latest_weight, primary_goal_of
 
 LEVEL_LABELS = {
@@ -192,12 +197,14 @@ async def build_user_context(session: AsyncSession, user: User) -> str:
         )
 
     facts = await daily_facts(session, user, today)
+    streak = await logging_streak_days(session, user.id)
     sections.append(
         "## Bugün\n"
         f"Kalori: {facts['kcal_total']} kcal, Protein: {facts['protein_total']} g, "
         f"Su: {facts['water_ml']} ml"
         + (f", Tartı: {facts['weight_kg']:g} kg" if facts["weight_kg"] else "")
         + ("\nÖğünler: " + "; ".join(m["desc"] for m in facts["meals"]) if facts["meals"] else "")
+        + f"\nKayıt serisi: {streak} gün üst üste"
     )
 
     plan_text = await _today_plan_text(session, user.id, today)

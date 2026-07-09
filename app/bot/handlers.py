@@ -90,6 +90,22 @@ async def guard_allowlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _capture_group(update)
 
 
+async def cb_su(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """One-tap water logging from reminder buttons. Whoever taps logs their own
+    water, so both housemates can use the same button in the group."""
+    query = update.callback_query
+    try:
+        ml = int(query.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        return await query.answer()
+    user = await get_user(query.from_user.id)
+    if user is None or user.onboarding_state != "active":
+        return await query.answer("Önce /start ile tanışalım 🙂")
+    async with session_scope() as session:
+        session.add(WaterLog(user_id=user.id, amount_ml=ml))
+    await query.answer(f"💧 +{ml} ml kaydedildi, sağlığına!")
+
+
 async def cb_onboarding_foreign(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Onboarding button tapped by someone who isn't in that questionnaire."""
     await update.callback_query.answer("Bu soru sana değil 🙂")

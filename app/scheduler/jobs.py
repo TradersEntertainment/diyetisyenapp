@@ -73,24 +73,51 @@ async def _resolve_chat(session, user: User) -> tuple[int, bool]:
     return user.telegram_id, False
 
 
-async def _send_to(application: Application, chat_id: int, text: str) -> None:
+async def _send_to(application: Application, chat_id: int, text: str, reply_markup=None) -> None:
     if not text:
         return
     try:
-        for i in range(0, len(text), 4000):
-            await application.bot.send_message(chat_id=chat_id, text=text[i : i + 4000])
+        chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)]
+        for i, chunk in enumerate(chunks):
+            # Attach the keyboard to the last chunk only.
+            markup = reply_markup if i == len(chunks) - 1 else None
+            await application.bot.send_message(chat_id=chat_id, text=chunk, reply_markup=markup)
     except Exception:
         log.exception("failed to send message to chat %s", chat_id)
 
 
-async def _send(application: Application, session, user: User, text: str, *, mention: bool = False) -> None:
+async def _send(
+    application: Application,
+    session,
+    user: User,
+    text: str,
+    *,
+    mention: bool = False,
+    reply_markup=None,
+) -> None:
     """Send a user-directed message to the group (name-prefixed when static) or DM."""
     if not text:
         return
     chat_id, is_group = await _resolve_chat(session, user)
     if is_group and mention and user.name:
         text = f"{user.name}, {text}"
-    await _send_to(application, chat_id, text)
+    await _send_to(application, chat_id, text, reply_markup)
+
+
+async def _send_weight_chart(application: Application, session, user: User, days: int) -> None:
+    """Post the user's weight trend as a PNG below a report message."""
+    from app.bot.charts import line_chart
+    from app.services.reports import weight_series
+
+    try:
+        series = await weight_series(session, user.id, days=days)
+        buf = line_chart(series, f"{user.name} — kilo ({days} gün)", "kg")
+        if not buf:
+            return
+        chat_id, _ = await _resolve_chat(session, user)
+        await application.bot.send_photo(chat_id=chat_id, photo=buf)
+    except Exception:
+        log.exception("weight chart send failed for user %s", user.id)
 
 
 # ------------------------------------------------------------------ reminders
@@ -124,11 +151,20 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
     _, is_group = await _resolve_chat(session, user)
 
     if kind == "gunaydin":
+        from app.services.reports import logging_streak_days
+
+        streak = await logging_streak_days(session, user.id)
+        streak_note = (
+            f" Bugün kayıt serisi {streak}. güne ulaştı — bunu coşkuyla kutla!"
+            if streak in (7, 14, 21) or (streak and streak % 30 == 0)
+            else ""
+        )
         text = await generate_message(
             session,
             user,
             "Kısa, samimi bir günaydın mesajı yaz: bugünün plandaki öğünlerini 1'er satırla hatırlat, "
-            "günün su ve protein hedefini söyle, motive edici tek cümleyle bitir. Emoji kullan ama abartma.",
+            "günün su ve protein hedefini söyle, motive edici tek cümleyle bitir. Emoji kullan ama abartma."
+            + streak_note,
             group_mode=is_group,
         )
         await _send(application, session, user, text or f"Günaydın {user.name}! ☀️ Bugün de birlikteyiz.")
@@ -145,15 +181,26 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         return
 
     if kind.startswith("su_"):
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
         facts = await daily_facts(session, user)
         target = facts["targets"]["water_ml"] or 2000
         drunk = facts["water_ml"]
+        markup = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("💧 +1 bardak (200 ml)", callback_data="su:200"),
+                    InlineKeyboardButton("💧 +500 ml", callback_data="su:500"),
+                ]
+            ]
+        )
         await _send(
             application,
             session,
             user,
-            f"💧 su molası! Bugün {drunk}/{target} ml içtin. Bir bardak daha? (kaydetmek için /su)",
+            f"💧 su molası! Bugün {drunk}/{target} ml içtin. Bir bardak daha?",
             mention=True,
+            reply_markup=markup,
         )
         return
 
@@ -240,10 +287,14 @@ async def daily_care(application: Application) -> None:
                 days_since_weigh = (
                     (datetime.now(last_w.ts.tzinfo) - last_w.ts).days if last_w else 99
                 )
+                from app.services.reports import logging_streak_days
+
+                streak = await logging_streak_days(session, user.id)
                 signals = (
                     f"Saat 16:30 civarı. Bugüne kadar kayıtlar: {len(facts['meals'])} öğün, "
                     f"{facts['kcal_total']} kcal, {facts['water_ml']} ml su. "
-                    f"Son tartıdan bu yana geçen gün: {days_since_weigh}."
+                    f"Son tartıdan bu yana geçen gün: {days_since_weigh}. "
+                    f"Kayıt serisi: {streak} gün (bugün hiç kayıt yoksa seri kırılmak üzere demektir)."
                 )
                 text = await generate_message(
                     session,
@@ -315,6 +366,7 @@ async def weekly_review(application: Application) -> None:
                     )
                 header = f"📋 Haftalık Değerlendirme — {user.name}\n\n" if user.name else "📋 Haftalık Değerlendirme\n\n"
                 await _send(application, session, user, header + message)
+                await _send_weight_chart(application, session, user, days=30)
             except Exception:
                 log.exception("weekly review failed for user %s", user.id)
 
@@ -379,6 +431,7 @@ async def monthly_report(application: Application) -> None:
                 if text:
                     header = f"🗓 Aylık Rapor — {user.name}\n\n" if user.name else "🗓 Aylık Rapor\n\n"
                     await _send(application, session, user, header + text)
+                    await _send_weight_chart(application, session, user, days=90)
             except Exception:
                 log.exception("monthly report failed for user %s", user.id)
 

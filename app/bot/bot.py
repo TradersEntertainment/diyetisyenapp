@@ -80,6 +80,7 @@ def create_application() -> Application:
     # here to avoid an endless loading spinner on their client.
     application.add_handler(CallbackQueryHandler(handlers.cb_onboarding_foreign, pattern=r"^onbm?:"))
 
+    application.add_handler(CallbackQueryHandler(handlers.cb_su, pattern=r"^su:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_shopping, pattern=r"^shop:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_rapor, pattern=r"^rapor:"))
     application.add_handler(CallbackQueryHandler(handlers.cb_grafik, pattern=r"^grafik:"))
