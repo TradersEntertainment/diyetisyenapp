@@ -113,7 +113,11 @@ async def _send_plan_image(application: Application, session, user: User, week_s
         if not buf:
             return
         chat_id, _ = await _resolve_chat(session, user)
-        await application.bot.send_photo(chat_id=chat_id, photo=buf)
+        # Document, not photo: Telegram recompresses photos and the table
+        # becomes unreadable.
+        await application.bot.send_document(
+            chat_id=chat_id, document=buf, filename=f"plan_{user.name or user.id}.png"
+        )
     except Exception:
         log.exception("plan image send failed for user %s", user.id)
 
@@ -625,7 +629,7 @@ async def generate_plan_for_user_bg(telegram_id: int, application: Application) 
                     u = res.scalar_one_or_none()
                     buf = await render_week_plan_png(session, u, week_start) if u else None
                 if buf:
-                    await application.bot.send_photo(chat_id=chat_id, photo=buf)
+                    await application.bot.send_document(chat_id=chat_id, document=buf, filename="plan.png")
             except Exception:
                 log.exception("post-onboarding plan image failed for %s", telegram_id)
         else:

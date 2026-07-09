@@ -175,3 +175,14 @@ def test_max_safe_weekly_loss_scales_with_weight():
 
     assert max_safe_weekly_loss_kg(152) == 1.52
     assert max_safe_weekly_loss_kg(70) == 0.7
+
+
+def test_validate_plan_kcal_flags_off_target_days():
+    from app.services.mealplan import validate_plan_kcal
+
+    plan = {"days": [
+        {"day_index": 0, "meals": [{"kcal": 1335}]},   # way under 1700
+        {"day_index": 1, "meals": [{"kcal": 1650}]},   # within 10%
+        {"day_index": 2, "meals": [{"kcal": 1900}]},   # over by ~12%
+    ]}
+    assert validate_plan_kcal(plan, 1700) == [0, 2]

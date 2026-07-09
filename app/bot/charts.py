@@ -90,7 +90,8 @@ def plan_image(
     target_kcal: int | None = None,
     target_protein: float | None = None,
 ) -> io.BytesIO | None:
-    """Render a weekly meal plan as a PNG grid (7 days x 6 slots + daily totals)."""
+    """Render a weekly meal plan as a hi-res PNG grid: 7 days x 6 slots with
+    per-meal portions and daily totals."""
     import textwrap
 
     by_day: dict[int, dict] = {}
@@ -99,12 +100,13 @@ def plan_image(
     if not by_day:
         return None
 
-    col_w = [1.1] + [2.5] * len(SLOT_LABELS) + [1.35]
-    row_h = 1.5
+    col_w = [1.1] + [3.0] * len(SLOT_LABELS) + [1.4]
+    header_h = 0.8
+    row_h = 2.2  # room for name (2) + portion (3) + macros (1) lines
     width = sum(col_w)
-    height = (len(DAY_NAMES) + 1) * row_h
+    height = header_h + len(DAY_NAMES) * row_h
 
-    fig, ax = plt.subplots(figsize=(width * 0.9, height * 0.72 + 0.8), dpi=115)
+    fig, ax = plt.subplots(figsize=(width * 0.95, height * 0.6 + 0.7), dpi=150)
     ax.set_xlim(0, width)
     ax.set_ylim(0, height)
     ax.invert_yaxis()
@@ -115,35 +117,59 @@ def plan_image(
         subtitle += f"  ·  Hedef: {target_kcal} kcal"
         if target_protein:
             subtitle += f" / P {target_protein:g} g"
-    ax.set_title(subtitle, fontsize=15, fontweight="bold", color="#17252a", pad=16)
+    ax.set_title(subtitle, fontsize=16, fontweight="bold", color="#17252a", pad=16)
 
     x_edges = [0.0]
     for w in col_w:
         x_edges.append(x_edges[-1] + w)
 
-    def cell(row, col, text, *, bold=False, bg=None, size=8.2, color="#17252a"):
+    def row_y(row: int) -> tuple[float, float]:
+        if row == 0:
+            return 0.0, header_h
+        return header_h + (row - 1) * row_h, row_h
+
+    def cell_box(row, col, *, bg=None):
         x0, x1 = x_edges[col], x_edges[col + 1]
-        y0 = row * row_h
+        y0, h = row_y(row)
         if bg:
-            ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, row_h, facecolor=bg, edgecolor="none", zorder=0))
+            ax.add_patch(plt.Rectangle((x0, y0), x1 - x0, h, facecolor=bg, edgecolor="none", zorder=0))
         ax.add_patch(
-            plt.Rectangle((x0, y0), x1 - x0, row_h, fill=False, edgecolor="#c9d6d3", linewidth=0.8, zorder=2)
+            plt.Rectangle((x0, y0), x1 - x0, h, fill=False, edgecolor="#c9d6d3", linewidth=0.8, zorder=2)
         )
+        return x0, x1, y0, h
+
+    def cell(row, col, text, *, bold=False, bg=None, size=8.5, color="#17252a"):
+        x0, x1, y0, h = cell_box(row, col, bg=bg)
         ax.text(
-            (x0 + x1) / 2, y0 + row_h / 2, text,
+            (x0 + x1) / 2, y0 + h / 2, text,
             ha="center", va="center", fontsize=size, color=color,
-            fontweight="bold" if bold else "normal", zorder=3, linespacing=1.25,
+            fontweight="bold" if bold else "normal", zorder=3, linespacing=1.3,
         )
 
-    cell(0, 0, "Gün", bold=True, bg=COLOR, color="white", size=9.5)
+    def meal_cell(row, col, m, *, bg=None):
+        x0, x1, y0, h = cell_box(row, col, bg=bg)
+        cx = (x0 + x1) / 2
+        name = "\n".join(textwrap.wrap(m.get("name", ""), 26)[:2])
+        ax.text(cx, y0 + h * 0.22, name, ha="center", va="center",
+                fontsize=8.5, color="#17252a", zorder=3, linespacing=1.25)
+        portion = (m.get("portion") or "").strip()
+        if portion:
+            ptext = "\n".join(textwrap.wrap(portion, 34)[:3])
+            ax.text(cx, y0 + h * 0.58, ptext, ha="center", va="center",
+                    fontsize=7.2, color="#5a6b68", zorder=3, linespacing=1.25)
+        ax.text(cx, y0 + h * 0.88, f"{m.get('kcal', 0)} kcal · P{m.get('protein_g', 0):g}",
+                ha="center", va="center", fontsize=8, color=COLOR,
+                fontweight="bold", zorder=3)
+
+    cell(0, 0, "Gün", bold=True, bg=COLOR, color="white", size=10)
     for j, (_, label) in enumerate(SLOT_LABELS, start=1):
-        cell(0, j, label, bold=True, bg=COLOR, color="white", size=9.5)
-    cell(0, len(SLOT_LABELS) + 1, "Toplam", bold=True, bg=COLOR, color="white", size=9.5)
+        cell(0, j, label, bold=True, bg=COLOR, color="white", size=10)
+    cell(0, len(SLOT_LABELS) + 1, "Toplam", bold=True, bg=COLOR, color="white", size=10)
 
     for i, day_name in enumerate(DAY_NAMES, start=1):
         di = i - 1
         bg = "#f2f7f6" if di % 2 == 0 else "white"
-        cell(i, 0, day_name, bold=True, bg=bg, size=9)
+        cell(i, 0, day_name, bold=True, bg=bg, size=9.5)
         meals = by_day.get(di, {})
         total_kcal = 0
         total_protein = 0.0
@@ -152,16 +178,14 @@ def plan_image(
             if m:
                 total_kcal += m.get("kcal") or 0
                 total_protein += m.get("protein_g") or 0
-                name = "\n".join(textwrap.wrap(m.get("name", ""), 24)[:3])
-                text = f"{name}\n{m.get('kcal', 0)} kcal · P{m.get('protein_g', 0):g}"
+                meal_cell(i, j, m, bg=bg)
             else:
-                text = "—"
-            cell(i, j, text, bg=bg)
+                cell(i, j, "—", bg=bg)
         on_target = target_kcal and abs(total_kcal - target_kcal) <= target_kcal * 0.10
         cell(
             i, len(SLOT_LABELS) + 1,
             f"{total_kcal} kcal\nP{round(total_protein, 1):g} g",
-            bold=True, bg=bg, size=9,
+            bold=True, bg=bg, size=9.5,
             color=COLOR if (not target_kcal or on_target) else TARGET_COLOR,
         )
 

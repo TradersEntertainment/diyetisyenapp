@@ -233,7 +233,9 @@ TOOLS: list[dict] = [
         "description": (
             "Plandaki bir öğünü kullanıcının isteği üzerine başka bir yemekle değiştir. "
             "Önce get_meal_plan ile planned_meal_id'yi bul. Yeni öğünün makrolarını sen hesapla; "
-            "günün toplam proteini protein tabanının altına düşmemeli."
+            "günün toplam proteini protein tabanının altına düşmemeli. "
+            "DİKKAT: Bu araç SADECE tek öğünü değiştirir — kalori/tempo hedefi değiştiğinde planı "
+            "bununla güncellemeye çalışma, regenerate_meal_plan kullan."
         ),
         "input_schema": {
             "type": "object",
@@ -587,6 +589,9 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             f"Hedef güncellendi: {row.kcal} kcal/gün (protein {row.protein_g} g, karb {row.carb_g} g, "
             f"yağ {row.fat_g} g). Beklenen tempo: ~{achievable:g} kg/hafta."
             + ((" " + " ".join(notes)) if notes else "")
+            + " ÖNEMLİ: Aktif haftalık plan ESKİ hedefe göre hazırlandı ve artık uyumsuz. "
+            "Kullanıcı planın da güncellenmesini istiyorsa TEK ÖĞÜN DEĞİŞTİRMEYE ÇALIŞMA — "
+            "regenerate_meal_plan çağır ki tüm hafta yeni hedefe göre yeniden hazırlansın."
         )
 
     if name == "set_calorie_target":
@@ -609,7 +614,10 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             note = f" (İstenen {kcal} kcal, protein tabanı + minimum yağ için {row.kcal} kcal'ye yükseltildi.)"
         return (
             f"Hedef güncellendi: {row.kcal} kcal, protein {row.protein_g} g, "
-            f"karbonhidrat {row.carb_g} g, yağ {row.fat_g} g.{note}"
+            f"karbonhidrat {row.carb_g} g, yağ {row.fat_g} g.{note} "
+            "ÖNEMLİ: Aktif haftalık plan ESKİ hedefe göre hazırlandı ve artık uyumsuz. "
+            "Kullanıcı planın da güncellenmesini istiyorsa TEK ÖĞÜN DEĞİŞTİRMEYE ÇALIŞMA — "
+            "regenerate_meal_plan çağır ki tüm hafta yeni hedefe göre yeniden hazırlansın."
         )
 
     if name == "apply_plan_day_to_week":

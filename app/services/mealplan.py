@@ -178,6 +178,16 @@ def validate_plan_protein(plan_data: dict, protein_floor: int, tolerance: float 
     return bad
 
 
+def validate_plan_kcal(plan_data: dict, target_kcal: int, tolerance: float = 0.10) -> list[int]:
+    """Return the day_indexes whose total kcal is off the target by > tolerance."""
+    bad = []
+    for day in plan_data.get("days", []):
+        total = sum(m.get("kcal", 0) for m in day.get("meals", []))
+        if abs(total - target_kcal) > target_kcal * tolerance:
+            bad.append(day["day_index"])
+    return bad
+
+
 async def generate_weekly_plan(
     session: AsyncSession,
     user: User,
@@ -226,10 +236,18 @@ async def generate_weekly_plan(
 Her gün: kahvalti, ara_ogun_1, ogle, ara_ogun_2, aksam{"" if night_snack else ", istenirse gece_atistirmasi"}.
 {night_snack}
 Her öğünde: isim, KISA tarif, hazırlık süresi, kalori+makrolar+lif, malzemeler.
-ÖNEMLİ — PORSİYON: Her öğünün recipe alanı bu kullanıcının porsiyon miktarlarıyla BAŞLASIN
-(örn: "Porsiyon: 250 g tavuk göğsü, 150 g haşlanmış bulgur, 1 kase cacık."), sonra 1-3 cümle
-hazırlanış gelsin. Malzemeler de aynı porsiyona göre
-(alışveriş listesi için gerçekçi miktarlarla) ve 1-2 alternatif.
+ÖNEMLİ — PORSİYON: Her öğünün recipe alanı bu kullanıcının porsiyon miktarlarıyla BAŞLASIN ve
+HER kalem ÖLÇÜLÜ olsun: gram ("100 g lor"), adet+gramaj ("2 adet tam buğday lavaş, 60 g/adet")
+veya hacim+gram karşılığı ("1 su bardağı süt (200 ml)"). "Biraz", "bir kase", "bir tabak" gibi
+ölçüsüz ifade YASAK. Örnek: "Porsiyon: 250 g tavuk göğsü, 150 g haşlanmış bulgur, 200 g cacık
+(süzme yoğurttan)." Sonra 1-3 cümle hazırlanış gelsin. Malzemeler de aynı porsiyona göre.
+
+ÖNEMLİ — GÜNDE TEK PİŞEN ET: Bir günde yalnızca BİR pişen et türü kullan (tavuk / hindi / balık
+ve deniz ürünleri / kırmızı et-kıyma-kuzu türlerinden sadece biri). Öğlen kıyma varsa akşama balık
+KOYMA — akşam ya aynı et türünden ya da etsiz/baklagilli olur. Hindi füme, salam gibi hazır
+şarküteri ürünleri ve yumurta bu kurala DAHİL DEĞİLDİR (her gün serbest).
+
+Malzemeleri alışveriş listesi için gerçekçi miktarlarla yaz ve her öğüne 1-2 alternatif ekle.
 
 ## Kişiselleştirme verileri
 ### Tercihler
@@ -281,14 +299,29 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
             log.exception("meal plan generation attempt %s failed for user %s", attempt + 1, user.id)
             continue
 
-        bad_days = validate_plan_protein(candidate, protein_floor)
+        bad_protein_days = validate_plan_protein(candidate, protein_floor)
+        bad_kcal_days = validate_plan_kcal(candidate, targets_row.kcal)
         plan_data = candidate
-        if not bad_days:
+        if not bad_protein_days and not bad_kcal_days:
             break
-        log.warning("plan for user %s misses protein floor on days %s (attempt %s)", user.id, bad_days, attempt + 1)
+        log.warning(
+            "plan for user %s off-target (attempt %s): protein days %s, kcal days %s",
+            user.id, attempt + 1, bad_protein_days, bad_kcal_days,
+        )
+        problems = []
+        if bad_protein_days:
+            problems.append(
+                f"şu günlerin toplam proteini {protein_floor} g alt sınırının altında: {bad_protein_days}"
+            )
+        if bad_kcal_days:
+            problems.append(
+                f"şu günlerin toplam kalorisi {targets_row.kcal} kcal hedefinden %10'dan fazla sapıyor: {bad_kcal_days}"
+            )
         feedback = (
-            f"\n\nÖNEMLİ DÜZELTME: Önceki denemede şu günlerin toplam proteini {protein_floor} g alt sınırının "
-            f"altında kaldı: {bad_days}. Her günün toplam proteini en az {protein_floor} g olacak şekilde planı yeniden yaz."
+            "\n\nÖNEMLİ DÜZELTME: Önceki denemede "
+            + "; ".join(problems)
+            + f". Her günün toplamı {targets_row.kcal} kcal (±%10) ve en az {protein_floor} g protein "
+            "olacak şekilde planı yeniden yaz."
         )
 
     if plan_data is None:
@@ -376,8 +409,15 @@ async def render_week_plan_png(session: AsyncSession, user: User, week_start: da
     res = await session.execute(select(PlannedMeal).where(PlannedMeal.plan_id == plan.id))
     by_day: dict[int, list[dict]] = {}
     for m in res.scalars():
+        # Recipes start with "Porsiyon: 100 g lor, 2 adet lavaş (60 g)..." —
+        # surface that first sentence in the table.
+        portion = ""
+        if m.recipe:
+            first = m.recipe.split(".")[0].strip()
+            if first.lower().startswith("porsiyon"):
+                portion = first.split(":", 1)[-1].strip()
         by_day.setdefault(m.day_index, []).append(
-            {"slot": m.slot, "name": m.name, "kcal": m.kcal, "protein_g": m.protein_g}
+            {"slot": m.slot, "name": m.name, "kcal": m.kcal, "protein_g": m.protein_g, "portion": portion}
         )
     targets = await get_current_targets(session, user.id)
     title = f"{user.name} — Haftalık Plan ({week_start.strftime('%d.%m')})"

@@ -227,7 +227,7 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
             buf = await render_week_plan_png(session, res.scalar_one())
         if buf:
-            return await update.effective_chat.send_photo(photo=buf)
+            return await update.effective_chat.send_document(document=buf, filename="plan.png")
         return await update.message.reply_text("Bu hafta için görselleştirecek plan yok. 🙈")
 
     from app.models import MealPlan, PlannedMeal
@@ -696,7 +696,7 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if buf:
                         bufs.append(buf)
             for buf in bufs:
-                await update.effective_chat.send_photo(photo=buf)
+                await update.effective_chat.send_document(document=buf, filename="plan.png")
             if not bufs:
                 await update.effective_chat.send_message("Bu hafta için görselleştirecek plan bulamadım. 🙈")
         except Exception:

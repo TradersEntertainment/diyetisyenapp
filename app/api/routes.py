@@ -630,7 +630,7 @@ async def _regenerate_plan_bg(user_id: int, app) -> None:
             )
             if buf:
                 try:
-                    await bot_app.bot.send_photo(chat_id=chat_id, photo=buf)
+                    await bot_app.bot.send_document(chat_id=chat_id, document=buf, filename="plan.png")
                 except Exception:
                     log.exception("plan image send failed")
     except Exception:
