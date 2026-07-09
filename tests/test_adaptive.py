@@ -1,5 +1,6 @@
 """Tests for the adaptive engine — every spec branch + the protein-floor invariant."""
 from app.services.adaptive import (
+    AdjustmentDecision,
     apply_adjustments,
     decide_adjustments,
     spread_cheat_surplus,
@@ -92,3 +93,31 @@ def test_cheat_surplus_spread_no_punishment():
 
 def test_cheat_surplus_zero():
     assert spread_cheat_surplus(0) == [0, 0, 0]
+
+
+def test_inflated_legacy_target_is_pulled_down_while_losing():
+    """A carried-over kcal target far above the fresh formula target (e.g. from
+    an older formula) must self-correct on the weekly review."""
+    from app.services.calculations import compute_targets
+
+    d = AdjustmentDecision()
+    fresh = compute_targets(primary_goal=GOAL_LOSE, **BODY)
+    targets = apply_adjustments(d, current_kcal=3217, primary_goal=GOAL_LOSE, **BODY)
+    assert targets.kcal <= fresh.kcal + 300
+    assert any("çekildi" in r for r in d.reasons)
+
+
+def test_reasonable_target_is_not_clamped():
+    from app.services.calculations import compute_targets
+
+    d = AdjustmentDecision()
+    fresh = compute_targets(primary_goal=GOAL_LOSE, **BODY)
+    targets = apply_adjustments(d, current_kcal=fresh.kcal - 100, primary_goal=GOAL_LOSE, **BODY)
+    assert targets.kcal == fresh.kcal - 100
+    assert not d.reasons
+
+
+def test_gain_goal_not_clamped():
+    d = AdjustmentDecision()
+    targets = apply_adjustments(d, current_kcal=3500, primary_goal=GOAL_GAIN, **BODY)
+    assert targets.kcal == 3500

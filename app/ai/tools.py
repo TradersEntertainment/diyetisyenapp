@@ -176,6 +176,23 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "set_weight_loss_pace",
+        "description": (
+            "Kilo verme temposunu ayarla: kullanıcı 'haftada X kg vereyim' dediğinde çağır. "
+            "Tempoyu kaloriye çevirir, güvenlik sınırlarını (haftada ~%1 vücut ağırlığı, protein "
+            "tabanı + minimum yağ kalori tabanı) uygular ve GERÇEKLEŞEBİLİR tempoyu raporlar — "
+            "dönüşteki sayıları kullan, kendin hesaplama."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kg_per_week": {"type": "number", "description": "İstenen haftalık kilo kaybı (kg), örn. 0.5 veya 1.0"},
+                "reason": {"type": "string", "description": "Kısa gerekçe"},
+            },
+            "required": ["kg_per_week"],
+        },
+    },
+    {
         "name": "set_calorie_target",
         "description": (
             "Günlük kalori hedefini değiştir (kullanıcı onayıyla). Makrolar yeniden hesaplanır; "
@@ -478,6 +495,14 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
         tdee_value = round(tdee_fn(bmr_value, eff_activity))
         recommended = await compute_targets_for_user(session, user)
         current = await get_current_targets(session, uid)
+
+        from app.services.calculations import kcal_for_weekly_loss, max_safe_weekly_loss_kg
+
+        gender = profile.gender or "kadin"
+        pace_table = {
+            f"{pace:g} kg/hafta": kcal_for_weekly_loss(tdee_value, pace, gender)
+            for pace in (0.5, 0.75, 1.0)
+        }
         payload = {
             "guncel_kilo_kg": weight,
             "bmi": bmi_value,
@@ -488,12 +513,80 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             "mevcut_hedef_kcal": current.kcal if current else None,
             "sistemin_onerdigi_guncel_hedef_kcal": recommended.kcal if recommended else None,
             "protein_tabani_g": recommended.protein_floor_g if recommended else None,
+            "tempo_secenekleri_kcal": pace_table,
+            "max_guvenli_tempo_kg_hafta": max_safe_weekly_loss_kg(weight),
             "not": (
                 "Mevcut hedef ile önerilen hedef arasında belirgin fark varsa kullanıcıya söyle ve "
-                "onaylarsa set_calorie_target ile güncelle."
+                "onaylarsa set_calorie_target ile güncelle. Tempo konuşulursa set_weight_loss_pace kullan."
             ),
         }
         return json.dumps(payload, ensure_ascii=False)
+
+    if name == "set_weight_loss_pace":
+        from app.services.calculations import (
+            bmi as bmi_fn,
+            bmr as bmr_fn,
+            effective_activity_level,
+            kcal_for_weekly_loss,
+            max_safe_weekly_loss_kg,
+            tdee as tdee_fn,
+        )
+        from app.services.targets import (
+            compute_targets_for_user,
+            get_profile,
+            latest_body_fat,
+            latest_weight,
+            save_targets,
+        )
+
+        profile = await get_profile(session, uid)
+        if not profile or not profile.height_cm or not profile.age:
+            return "HATA: profil eksik (boy/yaş yok)."
+        weight = await latest_weight(session, uid) or profile.start_weight_kg
+        if not weight:
+            return "HATA: kayıtlı kilo yok."
+        body_fat = await latest_body_fat(session, uid) or profile.body_fat_pct
+        gender = profile.gender or "kadin"
+
+        requested = float(p["kg_per_week"])
+        max_safe = max_safe_weekly_loss_kg(weight)
+        pace = min(requested, max_safe)
+
+        bmi_value = bmi_fn(weight, profile.height_cm)
+        bmr_value = bmr_fn(weight, profile.height_cm, profile.age, gender, body_fat)
+        tdee_value = tdee_fn(
+            bmr_value, effective_activity_level(profile.activity_level or "hafif_aktif", bmi_value)
+        )
+        kcal = kcal_for_weekly_loss(tdee_value, pace, gender)
+        targets = await compute_targets_for_user(session, user, kcal_override=kcal)
+        if not targets:
+            return "HATA: hedef hesaplanamadı."
+        current = await get_current_targets(session, uid)
+        row = await save_targets(
+            session,
+            uid,
+            targets,
+            diet_strategy=current.diet_strategy if current else "dengeli",
+            reason=p.get("reason") or f"Hedef tempo: haftada {pace:g} kg kilo kaybı.",
+        )
+        # compute_targets may have raised kcal for the protein floor + minimum
+        # fat; report the pace that the FINAL calorie figure actually delivers.
+        achievable = round((tdee_value - row.kcal) * 7 / 7700, 2)
+        notes = []
+        if requested > max_safe:
+            notes.append(
+                f"İstenen {requested:g} kg/hafta güvenli sınırın üstünde; {max_safe:g} kg/hafta'ya kırpıldı."
+            )
+        if row.kcal > kcal:
+            notes.append(
+                f"Protein tabanı + minimum yağ için kalori {row.kcal} kcal'nin altına inemez; "
+                f"bu kaloriyle gerçekçi tempo ~{achievable:g} kg/hafta."
+            )
+        return (
+            f"Hedef güncellendi: {row.kcal} kcal/gün (protein {row.protein_g} g, karb {row.carb_g} g, "
+            f"yağ {row.fat_g} g). Beklenen tempo: ~{achievable:g} kg/hafta."
+            + ((" " + " ".join(notes)) if notes else "")
+        )
 
     if name == "set_calorie_target":
         from app.services.targets import compute_targets_for_user, save_targets

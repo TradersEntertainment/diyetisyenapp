@@ -145,6 +145,21 @@ def calorie_target(tdee_value: float, primary_goal: str, gender: str, bmi_value:
     return round(max(kcal, floor))
 
 
+KCAL_PER_KG_FAT = 7700
+
+
+def kcal_for_weekly_loss(tdee_value: float, weekly_kg: float, gender: str) -> int:
+    """Daily calorie target that yields ~weekly_kg of fat loss per week."""
+    kcal = tdee_value - weekly_kg * KCAL_PER_KG_FAT / 7
+    floor = MIN_KCAL_MALE if gender == "erkek" else MIN_KCAL_FEMALE
+    return round(max(kcal, floor))
+
+
+def max_safe_weekly_loss_kg(weight_kg: float) -> float:
+    """Sustainable ceiling: ~1% of bodyweight per week."""
+    return round(weight_kg * 0.01, 2)
+
+
 def water_target_ml(weight_kg: float, exercise_days_per_week: int | None = None) -> int:
     ml = weight_kg * 33
     if exercise_days_per_week and exercise_days_per_week >= 3:

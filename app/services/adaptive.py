@@ -116,6 +116,15 @@ def apply_adjustments(
         body_fat_pct=body_fat_pct,
         exercise_days_per_week=exercise_days_per_week,
     )
+    # While losing, a carried-over target far above the fresh formula target
+    # (e.g. a legacy value computed with an older formula) self-corrects here.
+    # +300 leaves room for the deliberate "loss too fast -> eat more" rule.
+    if primary_goal == GOAL_LOSE and new_kcal > floor_probe.kcal + 300:
+        decision.reasons.append(
+            f"Kalori hedefi güncel hesabın belirgin üzerindeydi ({new_kcal} kcal); "
+            f"{floor_probe.kcal + 300} kcal'ye çekildi."
+        )
+        new_kcal = floor_probe.kcal + 300
     targets = compute_targets(
         weight_kg=weight_kg,
         height_cm=height_cm,

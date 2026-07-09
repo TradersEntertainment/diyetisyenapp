@@ -155,3 +155,23 @@ def test_effective_activity_level_only_drops_at_high_bmi():
     assert effective_activity_level("orta_aktif", 25) == "orta_aktif"
     assert effective_activity_level("orta_aktif", 33) == "hafif_aktif"
     assert effective_activity_level("sedanter", 40) == "sedanter"
+
+
+# --- Pace-based targeting ---
+
+
+def test_kcal_for_weekly_loss():
+    from app.services.calculations import kcal_for_weekly_loss
+
+    assert kcal_for_weekly_loss(2808, 1.0, "erkek") == round(2808 - 7700 / 7)  # ~1708
+    assert kcal_for_weekly_loss(2808, 0.5, "erkek") == round(2808 - 550)
+    # Never below the gendered safety floor
+    assert kcal_for_weekly_loss(2000, 2.0, "kadin") == 1200
+    assert kcal_for_weekly_loss(2000, 2.0, "erkek") == 1500
+
+
+def test_max_safe_weekly_loss_scales_with_weight():
+    from app.services.calculations import max_safe_weekly_loss_kg
+
+    assert max_safe_weekly_loss_kg(152) == 1.52
+    assert max_safe_weekly_loss_kg(70) == 0.7
