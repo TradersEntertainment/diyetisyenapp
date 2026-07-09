@@ -543,17 +543,31 @@ async function loadPlan() {
   document.getElementById("planBox").innerHTML = html;
 }
 
+const _sleep = ms => new Promise(r => setTimeout(r, ms));
+
 async function regeneratePlan() {
   const btn = document.getElementById("regenBtn");
+  const status = document.getElementById("regenStatus");
   btn.disabled = true;
-  document.getElementById("regenStatus").textContent = "Plan oluşturuluyor, bu birkaç dakika sürebilir... ⏳";
+  status.textContent = "Plan oluşturuluyor, bu birkaç dakika sürebilir... ⏳";
   try {
     await api(`/api/users/${currentUserId}/plan/regenerate`, { method: "POST" });
-    document.getElementById("regenStatus").textContent = "Plan hazır ✓";
-    toast("Yeni plan oluşturuldu");
-    await loadPlan();
+    // Generation runs server-side in the background; poll until it settles.
+    for (let i = 0; i < 120; i++) {
+      await _sleep(5000);
+      const s = await api(`/api/users/${currentUserId}/plan/status`);
+      if (s.status === "done") {
+        status.textContent = "Plan hazır ✓";
+        toast("Yeni plan oluşturuldu");
+        await loadPlan();
+        return;
+      }
+      if (s.status === "error") throw new Error("Plan oluşturulamadı — tekrar dener misin?");
+      if (s.status === "idle") throw new Error("Sunucu yeniden başlamış olabilir, lütfen tekrar dene.");
+    }
+    throw new Error("Zaman aşımı — plan hâlâ oluşuyor olabilir, birazdan sayfayı yenile.");
   } catch (e) {
-    document.getElementById("regenStatus").textContent = "";
+    status.textContent = "";
     toast(e.message, true);
   } finally { btn.disabled = false; }
 }

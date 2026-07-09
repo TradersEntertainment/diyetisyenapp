@@ -577,34 +577,78 @@ async def user_plan(user_id: int):
         return {"week_start": week_start.isoformat(), "strategy": plan.diet_strategy, "days": days}
 
 
-@router.post("/users/{user_id}/plan/regenerate", dependencies=[Depends(require_token)])
-async def regenerate_plan(user_id: int):
-    """Synchronous — an AI call, can take up to a couple of minutes. The panel
-    shows a spinner while this is in flight."""
+# Plan generation runs in a background task: the AI call takes minutes, and a
+# synchronous request would be killed by proxy timeouts / redeploys.
+_plan_jobs: dict[int, str] = {}  # user_id -> "running" | "done" | "error"
+
+
+async def _regenerate_plan_bg(user_id: int, app) -> None:
+    import logging
+
     from app.services.mealplan import extract_dinners, generate_weekly_plan
     from app.services.shopping import build_weekly_shopping_list
 
+    log = logging.getLogger(__name__)
     today = date.today()
     week_start = today - timedelta(days=today.weekday())
+    try:
+        async with session_scope() as session:
+            user = await session.get(User, user_id)
+            if not user:
+                _plan_jobs[user_id] = "error"
+                return
+            res = await session.execute(
+                select(MealPlan).where(
+                    MealPlan.week_start == week_start, MealPlan.status == "active", MealPlan.user_id != user_id
+                )
+            )
+            partner_plan = res.scalars().first()
+            partner_dinners = None
+            if partner_plan:
+                await session.refresh(partner_plan, ["meals"])
+                partner_dinners = extract_dinners(partner_plan.meals)
+            plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
+            if plan:
+                await build_weekly_shopping_list(session, week_start)
+            user_name = user.name
+        _plan_jobs[user_id] = "done" if plan else "error"
+
+        # Announce in the shared group so the household hears about it too.
+        bot_app = getattr(app.state, "bot_app", None)
+        if plan and bot_app:
+            from app.scheduler.jobs import _resolve_chat, _send_to
+
+            async with session_scope() as session:
+                user = await session.get(User, user_id)
+                chat_id, _ = await _resolve_chat(session, user)
+            await _send_to(
+                bot_app, chat_id,
+                f"📋 {user_name} için yeni haftalık plan hazır! /plan yazarak bugüne, "
+                "/plan hafta yazarak tüm haftaya bakabilirsiniz. 🛒 Alışveriş listesi de güncellendi.",
+            )
+    except Exception:
+        log.exception("background plan generation failed for user %s", user_id)
+        _plan_jobs[user_id] = "error"
+
+
+@router.post("/users/{user_id}/plan/regenerate", dependencies=[Depends(require_token)])
+async def regenerate_plan(user_id: int, request: Request):
+    import asyncio
+
     async with session_scope() as session:
         user = await session.get(User, user_id)
         if not user:
             raise HTTPException(404)
-        res = await session.execute(
-            select(MealPlan).where(
-                MealPlan.week_start == week_start, MealPlan.status == "active", MealPlan.user_id != user_id
-            )
-        )
-        partner_plan = res.scalars().first()
-        partner_dinners = None
-        if partner_plan:
-            await session.refresh(partner_plan, ["meals"])
-            partner_dinners = extract_dinners(partner_plan.meals)
-        plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
-        if not plan:
-            raise HTTPException(400, "plan generation failed (missing profile/targets?)")
-        await build_weekly_shopping_list(session, week_start)
-        return {"plan_id": plan.id, "week_start": week_start.isoformat()}
+    if _plan_jobs.get(user_id) == "running":
+        return {"status": "running"}
+    _plan_jobs[user_id] = "running"
+    asyncio.create_task(_regenerate_plan_bg(user_id, request.app))
+    return {"status": "started"}
+
+
+@router.get("/users/{user_id}/plan/status", dependencies=[Depends(require_token)])
+async def plan_status(user_id: int):
+    return {"status": _plan_jobs.get(user_id, "idle")}
 
 
 # ------------------------------------------------------------------ shopping
