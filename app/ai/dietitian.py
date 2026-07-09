@@ -58,11 +58,19 @@ async def _load_history(session: AsyncSession, user_id: int) -> list[dict]:
     return [{"role": r.role, "content": r.content} for r in rows if r.content.strip()]
 
 
-async def chat(session: AsyncSession, user: User, text: str, *, group_mode: bool = False) -> str:
+async def chat(
+    session: AsyncSession,
+    user: User,
+    text: str,
+    *,
+    group_mode: bool = False,
+    image: tuple[str, str] | None = None,
+) -> str:
     """One conversational turn: log data via tools, reply in Turkish.
 
     In group_mode the model may answer with SILENT_SENTINEL to stay out of a
     conversation between the two humans; the caller then sends nothing.
+    image is an optional (base64_data, media_type) pair, e.g. a photo of a meal.
     """
     client = get_client()
     context = await build_user_context(session, user)
@@ -70,7 +78,18 @@ async def chat(session: AsyncSession, user: User, text: str, *, group_mode: bool
 
     session.add(ConversationMessage(user_id=user.id, role="user", content=text))
 
-    messages: list = history + [{"role": "user", "content": text}]
+    content: str | list
+    if image:
+        content = [
+            {
+                "type": "image",
+                "source": {"type": "base64", "media_type": image[1], "data": image[0]},
+            },
+            {"type": "text", "text": text},
+        ]
+    else:
+        content = text
+    messages: list = history + [{"role": "user", "content": content}]
     reply_parts: list[str] = []
 
     for _ in range(MAX_TOOL_ROUNDS):

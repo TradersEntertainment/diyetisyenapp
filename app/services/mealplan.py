@@ -82,7 +82,9 @@ PLAN_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "day_index": {"type": "integer", "minimum": 0, "maximum": 6},
+                    # NOTE: structured-output schemas don't support minimum/maximum
+                    # on integers; the description carries the constraint instead.
+                    "day_index": {"type": "integer", "description": "0=Pazartesi ... 6=Pazar"},
                     "meals": {"type": "array", "items": MEAL_SCHEMA},
                 },
                 "required": ["day_index", "meals"],

@@ -486,26 +486,73 @@ async def cb_grafik(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------------------------------------------- photos & settings
 
 
+PHOTO_SAVE_SENTINEL = "[FOTO_KAYDET]"
+
+
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A photo is either a plate of food (estimate calories + log the meal) or a
+    progress photo (store it). The vision model looks and decides."""
+    import base64
+
     user = await get_user(update.effective_user.id)
     if msg := _require_active(user):
         return await update.message.reply_text(msg)
     photo = update.message.photo[-1]
-    async with session_scope() as session:
-        res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
-        user = res.scalar_one()
-        session.add(
-            ProgressPhoto(
-                user_id=user.id,
-                telegram_file_id=photo.file_id,
-                note=(update.message.caption or "")[:250],
+    caption = (update.message.caption or "").strip()
+    group_mode = _is_group(update)
+
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    try:
+        tg_file = await photo.get_file()
+        data = bytes(await tg_file.download_as_bytearray())
+        image_b64 = base64.b64encode(data).decode()
+    except Exception:
+        log.exception("photo download failed")
+        return await update.message.reply_text("Fotoğrafı indiremedim, tekrar gönderir misin? 🙏")
+
+    directive = (
+        "[Kullanıcı bir fotoğraf gönderdi]"
+        + (f" Fotoğraf notu: {caption}" if caption else "")
+        + "\nFotoğrafı dikkatle incele ve şuna göre davran:\n"
+        "- YEMEK/İÇECEK fotoğrafıysa: porsiyonu gözünle tahmin et, log_meal ile kaydet ve "
+        "kalori + protein tahminini samimi tek mesajla söyle (tahmin olduğunu belli et, gerekirse "
+        "tek kısa netleştirme sorusu sor).\n"
+        "- VÜCUT/İLERLEME fotoğrafıysa: kısa, motive edici bir şey yaz ve mesajının sonuna "
+        "aynen şunu ekle: [FOTO_KAYDET]\n"
+        "- Başka bir şeyse kısaca doğal biçimde yorumla."
+    )
+
+    from app.ai.dietitian import chat
+
+    try:
+        async with session_scope() as session:
+            res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
+            db_user = res.scalar_one()
+            reply = await chat(
+                session, db_user, directive, group_mode=group_mode, image=(image_b64, "image/jpeg")
             )
-        )
-    await update.message.reply_text("İlerleme fotoğrafın kaydedildi 📸 Gelişimini birlikte izleyeceğiz!")
+            if PHOTO_SAVE_SENTINEL in reply:
+                session.add(
+                    ProgressPhoto(
+                        user_id=db_user.id,
+                        telegram_file_id=photo.file_id,
+                        note=caption[:250],
+                    )
+                )
+                reply = reply.replace(PHOTO_SAVE_SENTINEL, "").strip()
+    except Exception:
+        log.exception("photo analysis failed")
+        reply = "Fotoğrafa şu an bakamadım, birazdan tekrar gönderir misin? 🙏"
+    if reply:
+        for i in range(0, len(reply), 4000):
+            await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
 
 
 async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Fotoğrafı doğrudan bu sohbete gönderebilirsin, ben kaydederim. 📸")
+    await update.message.reply_text(
+        "Fotoğrafı doğrudan gönder: tabağınsa kalorisini tahmin edip kaydederim, "
+        "vücut fotoğrafınsa ilerleme albümüne eklerim. 📸"
+    )
 
 
 REMINDER_LABELS = {
