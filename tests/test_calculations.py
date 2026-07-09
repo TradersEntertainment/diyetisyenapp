@@ -122,3 +122,36 @@ def test_macros_sum_close_to_kcal():
     )
     macro_kcal = t.protein_g * 4 + t.carb_g * 4 + t.fat_g * 9
     assert abs(macro_kcal - t.kcal) <= 60  # rounding tolerance
+
+
+# --- High-BMI conservative corrections ---
+
+
+def test_high_bmi_gets_conservative_target():
+    """152 kg / 180 cm: activity is stepped down one level and the deficit deepens
+    to 25%, so the target lands in a realistic dietitian range instead of ~3200."""
+    t = compute_targets(
+        weight_kg=152, height_cm=180, age=30, gender="erkek",
+        activity_level="orta_aktif", primary_goal=GOAL_LOSE,
+    )
+    assert 2300 <= t.kcal <= 2750
+    assert t.protein_g >= t.protein_floor_g
+
+
+def test_normal_bmi_keeps_standard_deficit():
+    from app.services.calculations import bmr, calorie_target, tdee
+
+    t = compute_targets(
+        weight_kg=70, height_cm=180, age=30, gender="erkek",
+        activity_level="orta_aktif", primary_goal=GOAL_LOSE,
+    )
+    expected = calorie_target(tdee(bmr(70, 180, 30, "erkek"), "orta_aktif"), GOAL_LOSE, "erkek", 21.6)
+    assert t.kcal == expected
+
+
+def test_effective_activity_level_only_drops_at_high_bmi():
+    from app.services.calculations import effective_activity_level
+
+    assert effective_activity_level("orta_aktif", 25) == "orta_aktif"
+    assert effective_activity_level("orta_aktif", 33) == "hafif_aktif"
+    assert effective_activity_level("sedanter", 40) == "sedanter"

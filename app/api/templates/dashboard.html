@@ -523,19 +523,28 @@ async function deletePref(id) {
 // ---------------- plan ----------------
 async function loadPlan() {
   const plan = await api(`/api/users/${currentUserId}/plan`);
+  let target = null;
+  try { target = (await api(`/api/users/${currentUserId}/targets`)).targets; } catch (e) {}
   const days = ["Pzt","Sal","Çar","Per","Cum","Cmt","Paz"];
   const slots = {kahvalti:"Kahvaltı", ara_ogun_1:"Ara 1", ogle:"Öğle", ara_ogun_2:"Ara 2", aksam:"Akşam", gece_atistirmasi:"Gece"};
   let html = `<h3>Strateji: ${plan.strategy || "—"}</h3>`;
+  if (target) {
+    html += `<p><b>Günlük hedef:</b> ${target.kcal} kcal · Protein ${target.protein_g} g · Karb ${target.carb_g} g · Yağ ${target.fat_g} g</p>`;
+  }
   if (!plan.days.length || plan.days.every(d => !d.meals.length)) {
     html += "<p>Bu hafta için plan yok. Yukarıdaki butonla oluşturabilirsin.</p>";
   } else {
-    html += "<table><tr><th>Gün</th>" + Object.values(slots).map(s => `<th>${s}</th>`).join("") + "</tr>";
+    html += "<table><tr><th>Gün</th>" + Object.values(slots).map(s => `<th>${s}</th>`).join("") + "<th>Toplam</th></tr>";
     for (const d of plan.days) {
       html += `<tr><td><b>${days[d.day_index]}</b></td>`;
+      let totKcal = 0, totP = 0;
       for (const slot of Object.keys(slots)) {
         const meal = d.meals.find(m => m.slot === slot);
+        if (meal) { totKcal += meal.kcal || 0; totP += meal.protein_g || 0; }
         html += `<td>${meal ? meal.name + `<br><small>${meal.kcal} kcal · P${meal.protein_g}</small>` : ""}</td>`;
       }
+      const off = target && Math.abs(totKcal - target.kcal) > target.kcal * 0.1;
+      html += `<td style="color:${off ? "#d95f5f" : "#2b7a78"};white-space:nowrap"><b>${totKcal} kcal</b><br><small>P${Math.round(totP * 10) / 10} g</small></td>`;
       html += "</tr>";
     }
     html += "</table>";

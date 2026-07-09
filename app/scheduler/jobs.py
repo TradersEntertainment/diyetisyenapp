@@ -7,7 +7,7 @@ re-registering jobs.
 import asyncio
 import logging
 import subprocess
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.db import session_scope
 from app.models import ReminderSetting, User
 from app.services.adaptive import apply_adjustments, decide_adjustments
-from app.services.mealplan import extract_dinners, generate_weekly_plan
+from app.services.mealplan import extract_dinners, generate_weekly_plan, render_week_plan_png
 from app.services.reports import (
     daily_facts,
     format_weekly_stats_tr,
@@ -104,6 +104,20 @@ async def _send(
     await _send_to(application, chat_id, text, reply_markup)
 
 
+async def _send_plan_image(application: Application, session, user: User, week_start=None) -> None:
+    """Post the user's weekly plan grid as a PNG."""
+    from app.services.mealplan import render_week_plan_png
+
+    try:
+        buf = await render_week_plan_png(session, user, week_start)
+        if not buf:
+            return
+        chat_id, _ = await _resolve_chat(session, user)
+        await application.bot.send_photo(chat_id=chat_id, photo=buf)
+    except Exception:
+        log.exception("plan image send failed for user %s", user.id)
+
+
 async def _send_weight_chart(application: Application, session, user: User, days: int) -> None:
     """Post the user's weight trend as a PNG below a report message."""
     from app.bot.charts import line_chart
@@ -146,7 +160,9 @@ async def reminder_tick(application: Application) -> None:
 
 
 async def _fire_reminder(application: Application, session, user: User, kind: str) -> None:
-    from app.ai.dietitian import generate_message
+    """Reminders are need-based: when the data is already in, we stay silent
+    instead of nagging (the household told us their habits once already)."""
+    from app.ai.dietitian import SILENT_SENTINEL, generate_message
 
     _, is_group = await _resolve_chat(session, user)
 
@@ -166,11 +182,16 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
             "günün su ve protein hedefini söyle, motive edici tek cümleyle bitir. Emoji kullan ama abartma."
             + streak_note,
             group_mode=is_group,
+            include_recent_dialogue=True,
+            store_in_history=True,
         )
         await _send(application, session, user, text or f"Günaydın {user.name}! ☀️ Bugün de birlikteyiz.")
         return
 
     if kind == "tarti":
+        facts = await daily_facts(session, user)
+        if facts["weight_kg"]:
+            return  # already weighed in today — no nagging
         await _send(
             application,
             session,
@@ -183,9 +204,22 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
     if kind.startswith("su_"):
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+        from app.models import WaterLog
+
         facts = await daily_facts(session, user)
         target = facts["targets"]["water_ml"] or 2000
         drunk = facts["water_ml"]
+        if drunk >= target * 0.9:
+            return  # on track — silence is golden
+        res = await session.execute(
+            select(WaterLog)
+            .where(WaterLog.user_id == user.id)
+            .order_by(WaterLog.ts.desc())
+            .limit(1)
+        )
+        last = res.scalars().first()
+        if last and (datetime.now(last.ts.tzinfo) - last.ts) < timedelta(minutes=90):
+            return  # they just logged water; don't pester
         markup = InlineKeyboardMarkup(
             [
                 [
@@ -207,9 +241,19 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
     if kind.startswith("ogun_"):
         slot = "ogle" if kind == "ogun_ogle" else "aksam"
         slot_name = "öğle" if slot == "ogle" else "akşam"
-        from app.models import MealPlan, PlannedMeal
+        from app.models import MealLog, MealPlan, PlannedMeal
 
         today = date.today()
+        day_start = datetime.combine(today, dtime.min, tzinfo=timezone.utc)
+        res = await session.execute(
+            select(MealLog).where(
+                MealLog.user_id == user.id,
+                MealLog.ts >= day_start,
+                MealLog.slot == slot,
+            )
+        )
+        if res.scalars().first():
+            return  # that meal is already logged — no reminder needed
         week_start = today - timedelta(days=today.weekday())
         res = await session.execute(
             select(MealPlan)
@@ -240,14 +284,35 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         return
 
     if kind == "aksam_kontrol":
+        from app.models import HungerLog, MoodLog, SleepLog
+
+        day_start = datetime.combine(date.today(), dtime.min, tzinfo=timezone.utc)
+        missing = []
+        for model, label in ((MoodLog, "ruh hali/enerji (1-5)"), (SleepLog, "uyku süresi"), (HungerLog, "açlık durumu")):
+            res = await session.execute(
+                select(model).where(model.user_id == user.id, model.ts >= day_start).limit(1)
+            )
+            if not res.scalars().first():
+                missing.append(label)
+        if missing:
+            ask = "Nazikçe SADECE şunları sor (gerisini sorma): " + ", ".join(missing) + "."
+        else:
+            ask = (
+                "Bugün her veri girilmiş; hiçbir şey sorma. Ya günü kapatan 1-2 cümlelik sıcak bir "
+                "mesaj yaz ya da söylenecek değerli bir şey yoksa sadece [SESSIZ] yaz."
+            )
         text = await generate_message(
             session,
             user,
-            "Kısa bir akşam check-in mesajı yaz: bugünkü kalori/protein/su durumunu 1-2 satırda özetle, "
-            "sonra nazikçe sor: bugün ruh halin/enerjin nasıldı (1-5), kaç saat uyudun, açlık çektin mi? "
-            "Tek mesaj, samimi ton.",
+            "Kısa bir akşam check-in mesajı yaz: bugünkü kalori/protein/su durumunu 1-2 satırda özetle. "
+            + ask
+            + " Tek mesaj, samimi ton.",
             group_mode=is_group,
+            include_recent_dialogue=True,
+            store_in_history=True,
         )
+        if text and SILENT_SENTINEL in text:
+            return
         await _send(
             application,
             session,
@@ -305,6 +370,8 @@ async def daily_care(application: Application) -> None:
                     "KISA ve sıcak tek bir mesaj yaz — soru sor, veri iste ya da hatırlat. "
                     "Her şey yolundaysa ve söylenecek değerli bir şey yoksa sadece [SESSIZ] yaz.",
                     group_mode=is_group,
+                    include_recent_dialogue=True,
+                    store_in_history=True,
                 )
                 if not text or SILENT_SENTINEL in text:
                     continue
@@ -385,6 +452,7 @@ async def weekly_review(application: Application) -> None:
                         "🍽 yeni haftalık planın hazır! /plan hafta yazarak inceleyebilirsin.",
                         mention=True,
                     )
+                    await _send_plan_image(application, session, user, next_monday)
             except Exception:
                 log.exception("plan generation failed for user %s", user.id)
 
@@ -500,6 +568,15 @@ async def generate_plan_for_user_bg(telegram_id: int, application: Application) 
             await _send_to(application, chat_id,
                 f"✅ {prefix}ilk haftalık planın hazır! /plan yazarak bugünü, /plan hafta yazarak tüm haftayı "
                 "görebilirsin. Alışveriş listen de hazır: /alisveris 🛒")
+            try:
+                async with session_scope() as session:
+                    res = await session.execute(select(User).where(User.telegram_id == telegram_id))
+                    u = res.scalar_one_or_none()
+                    buf = await render_week_plan_png(session, u, week_start) if u else None
+                if buf:
+                    await application.bot.send_photo(chat_id=chat_id, photo=buf)
+            except Exception:
+                log.exception("post-onboarding plan image failed for %s", telegram_id)
         else:
             await _send_to(application, chat_id,
                 f"{prefix}planını şu an oluşturamadım 😕 Birazdan \"bana plan hazırla\" yazarsan tekrar denerim.")

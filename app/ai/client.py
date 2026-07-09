@@ -13,3 +13,8 @@ def get_client() -> AsyncAnthropic:
 
 def get_model() -> str:
     return get_settings().anthropic_model
+
+
+def get_plan_model() -> str:
+    """Stronger model for weekly plan generation and strategy decisions."""
+    return get_settings().anthropic_plan_model

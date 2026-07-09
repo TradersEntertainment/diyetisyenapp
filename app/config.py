@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
+    # Stronger model for weekly meal plan generation + strategy decisions
+    # (runs only 1-2x/week, so the cost impact is tiny).
+    anthropic_plan_model: str = "claude-fable-5"
 
     # Database
     database_url: str = "postgresql+asyncpg://diyetisyen:diyetisyen@localhost:5432/diyetisyen"

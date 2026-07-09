@@ -60,6 +60,22 @@ def tdee(bmr_value: float, activity_level: str) -> float:
     return bmr_value * ACTIVITY_MULTIPLIERS.get(activity_level, 1.375)
 
 
+_ACTIVITY_ORDER = ["sedanter", "hafif_aktif", "orta_aktif", "aktif", "cok_aktif"]
+
+
+def effective_activity_level(activity_level: str, bmi_value: float) -> str:
+    """Conservative activity level used for TDEE.
+
+    At high BMI the standard multipliers inflate TDEE and self-reported
+    activity tends to be optimistic, which yields calorie targets too high to
+    actually lose weight on. BMI >= 30 drops the level one step.
+    """
+    if bmi_value < 30 or activity_level not in _ACTIVITY_ORDER:
+        return activity_level
+    idx = _ACTIVITY_ORDER.index(activity_level)
+    return _ACTIVITY_ORDER[max(0, idx - 1)]
+
+
 def navy_body_fat_pct(
     gender: str, height_cm: float, waist_cm: float, neck_cm: float, hip_cm: float | None = None
 ) -> float | None:
@@ -106,10 +122,21 @@ def protein_floor_g(
     return round(weight_kg * per_kg)
 
 
-def calorie_target(tdee_value: float, primary_goal: str, gender: str) -> int:
-    """Goal-based calorie target with safety floors."""
+def calorie_target(tdee_value: float, primary_goal: str, gender: str, bmi_value: float | None = None) -> int:
+    """Goal-based calorie target with safety floors.
+
+    The fat-loss deficit deepens with BMI: higher body fat safely supports a
+    larger deficit, and at high weights a flat 20% leaves the target too close
+    to real-world maintenance to reliably lose on.
+    """
     if primary_goal == GOAL_LOSE:
-        kcal = tdee_value * 0.80  # ~20% deficit -> roughly 0.5-1% bodyweight/week
+        deficit = 0.20  # -> roughly 0.5-1% bodyweight/week
+        if bmi_value is not None:
+            if bmi_value >= 32:
+                deficit = 0.25
+            elif bmi_value >= 27:
+                deficit = 0.22
+        kcal = tdee_value * (1 - deficit)
     elif primary_goal == GOAL_GAIN:
         kcal = tdee_value * 1.10
     else:
@@ -161,9 +188,14 @@ def compute_targets(
     """
     floor = protein_floor_g(weight_kg, body_fat_pct, primary_goal)
 
+    bmi_value = bmi(weight_kg, height_cm)
     bmr_value = bmr(weight_kg, height_cm, age, gender, body_fat_pct)
-    tdee_value = tdee(bmr_value, activity_level)
-    kcal = kcal_override if kcal_override is not None else calorie_target(tdee_value, primary_goal, gender)
+    tdee_value = tdee(bmr_value, effective_activity_level(activity_level, bmi_value))
+    kcal = (
+        kcal_override
+        if kcal_override is not None
+        else calorie_target(tdee_value, primary_goal, gender, bmi_value)
+    )
 
     protein = max(floor, protein_override_g or 0)
 

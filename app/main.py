@@ -32,11 +32,12 @@ log = logging.getLogger(__name__)
 
 async def _seed_on_startup() -> None:
     from app.db import session_scope
-    from app.services.seed import seed_foods
+    from app.services.seed import seed_foods, seed_kalibra
 
     try:
         async with session_scope() as session:
             await seed_foods(session)
+            await seed_kalibra(session)
     except Exception:
         log.exception("food seeding on startup failed")
 

@@ -217,7 +217,18 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = await get_user(update.effective_user.id)
     if msg := _require_active(user):
         return await update.message.reply_text(msg)
-    whole_week = bool(context.args and context.args[0].lower().startswith("haft"))
+    arg = (context.args[0].lower() if context.args else "")
+    whole_week = arg.startswith("haft")
+
+    if arg.startswith("gorsel") or arg.startswith("görsel"):
+        from app.services.mealplan import render_week_plan_png
+
+        async with session_scope() as session:
+            res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
+            buf = await render_week_plan_png(session, res.scalar_one())
+        if buf:
+            return await update.effective_chat.send_photo(photo=buf)
+        return await update.message.reply_text("Bu hafta için görselleştirecek plan yok. 🙈")
 
     from app.models import MealPlan, PlannedMeal
 
@@ -533,6 +544,9 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- YEMEK/İÇECEK fotoğrafıysa: porsiyonu gözünle tahmin et, log_meal ile kaydet ve "
         "kalori + protein tahminini samimi tek mesajla söyle (tahmin olduğunu belli et, gerekirse "
         "tek kısa netleştirme sorusu sor).\n"
+        "- ÜRÜN ETİKETİ / besin değerleri tablosu / ambalaj fotoğrafıysa: değerleri oku, add_food ile "
+        "veritabanına ekle (SDM Kalibra ürünüyse category='kalibra_urun') ve kaydettiğini söyle — "
+        "bu ürünler haftalık planlara otomatik girer.\n"
         "- VÜCUT/İLERLEME fotoğrafıysa: kısa, motive edici bir şey yaz ve mesajının sonuna "
         "aynen şunu ekle: [FOTO_KAYDET]\n"
         "- Başka bir şeyse kısaca doğal biçimde yorumla."
@@ -655,6 +669,27 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply = "Bir aksaklık oldu, mesajını birazdan tekrar yazar mısın? 🙏"
     if SILENT_SENTINEL in reply and len(reply.strip()) <= len(SILENT_SENTINEL) + 4:
         return  # the dietitian chose to stay out of a human-to-human exchange
+
+    send_plan_image = "[PLAN_GORSEL]" in reply
+    if send_plan_image:
+        reply = reply.replace("[PLAN_GORSEL]", "").strip()
+
     for i in range(0, len(reply), 4000):
         # In the group, quote the message being answered so it's clear who it's for.
         await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
+
+    if send_plan_image:
+        from app.services.mealplan import render_week_plan_png
+
+        try:
+            async with session_scope() as session:
+                res = await session.execute(
+                    select(User).where(User.telegram_id == update.effective_user.id)
+                )
+                buf = await render_week_plan_png(session, res.scalar_one())
+            if buf:
+                await update.effective_chat.send_photo(photo=buf)
+            else:
+                await update.effective_chat.send_message("Bu hafta için görselleştirecek plan bulamadım. 🙈")
+        except Exception:
+            log.exception("plan image send failed")

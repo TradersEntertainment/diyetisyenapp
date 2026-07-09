@@ -617,15 +617,22 @@ async def _regenerate_plan_bg(user_id: int, app) -> None:
         bot_app = getattr(app.state, "bot_app", None)
         if plan and bot_app:
             from app.scheduler.jobs import _resolve_chat, _send_to
+            from app.services.mealplan import render_week_plan_png
 
             async with session_scope() as session:
                 user = await session.get(User, user_id)
                 chat_id, _ = await _resolve_chat(session, user)
+                buf = await render_week_plan_png(session, user, week_start)
             await _send_to(
                 bot_app, chat_id,
                 f"📋 {user_name} için yeni haftalık plan hazır! /plan yazarak bugüne, "
                 "/plan hafta yazarak tüm haftaya bakabilirsiniz. 🛒 Alışveriş listesi de güncellendi.",
             )
+            if buf:
+                try:
+                    await bot_app.bot.send_photo(chat_id=chat_id, photo=buf)
+                except Exception:
+                    log.exception("plan image send failed")
     except Exception:
         log.exception("background plan generation failed for user %s", user_id)
         _plan_jobs[user_id] = "error"

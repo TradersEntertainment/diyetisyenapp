@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import get_client, get_model
+from app.ai.client import get_client, get_plan_model
 from app.ai.prompts import DIETITIAN_PERSONA
 from app.models import Food, FoodPreference, MealLog, MealPlan, PlannedMeal, User
 from app.services.reports import get_current_targets
@@ -128,6 +128,33 @@ async def _foods_block(session: AsyncSession, limit: int = 120) -> str:
     return "\n".join(lines) if lines else "(besin veritabanı boş)"
 
 
+async def _kalibra_block(session: AsyncSession) -> str:
+    """The household's SDM Kalibra high-protein products (category kalibra_urun)."""
+    res = await session.execute(select(Food).where(Food.category == "kalibra_urun"))
+    foods = list(res.scalars())
+    if not foods:
+        return ""
+    lines = []
+    for f in foods:
+        portion = (
+            f" | porsiyon: {f.typical_portion_name or ''} ~{f.typical_portion_g:g} g".rstrip()
+            if f.typical_portion_g
+            else ""
+        )
+        lines.append(
+            f"- {f.name_tr}: {f.kcal:g} kcal, P{f.protein_g:g} K{f.carb_g:g} Y{f.fat_g:g} "
+            f"Lif{f.fiber_g:g} /100g{portion}"
+        )
+    return "\n".join(lines)
+
+
+async def _plan_memory_block(session: AsyncSession, user_id: int) -> str:
+    """Durable memory notes so plan-shaping wishes (e.g. same menu every day) stick."""
+    from app.ai.context import _memory_text
+
+    return await _memory_text(session, user_id, limit=20)
+
+
 async def _recent_meals_block(session: AsyncSession, user_id: int, days: int = 21) -> str:
     from datetime import datetime, timezone
 
@@ -206,11 +233,18 @@ Beceri: {profile.cooking_skill or "orta"} | Ekipman: {", ".join(profile.kitchen_
 ### Son yediklerinden örnekler (alışkanlıklarını yansıt, birebir kopyalama)
 {await _recent_meals_block(session, user.id)}
 
+### Evdeki SDM Kalibra yüksek proteinli ürünler
+Ara öğün, tatlı ihtiyacı ve gece atıştırmalarında bu ürünlere ÖNCELİK ver (pratik ve protein açısından verimli):
+{await _kalibra_block(session) or "(kayıtlı ürün yok)"}
+
+### Hafıza notları (plan tercihlerini MUTLAKA yansıt: tek-tip menü isteği, öğün düzeni vb.)
+{await _plan_memory_block(session, user.id) or "(not yok)"}
+
 ### Besin veritabanından örnek değerler (porsiyon hesaplarında kullan)
 {await _foods_block(session)}
 {partner_block}
 
-Türk ve Akdeniz mutfağı ağırlıklı, pratik ve tekrar etmeyen bir hafta hazırla."""
+Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı tek-tip menü istemedikçe günleri tekrar ettirme."""
 
     client = get_client()
     plan_data: dict | None = None
@@ -218,7 +252,7 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik ve tekrar etmeyen bir hafta haz
     for attempt in range(2):
         try:
             async with client.messages.stream(
-                model=get_model(),
+                model=get_plan_model(),
                 max_tokens=64000,
                 system=[
                     {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}}
@@ -308,3 +342,34 @@ async def generate_household_plans(session: AsyncSession, users: list[User], wee
             await session.refresh(plan, ["meals"])
             partner_dinners = extract_dinners(plan.meals)
     return plans
+
+
+async def render_week_plan_png(session: AsyncSession, user: User, week_start: date | None = None):
+    """The user's active weekly plan as a PNG buffer (None when there's no plan)."""
+    from app.bot.charts import plan_image
+
+    today = date.today()
+    week_start = week_start or (today - timedelta(days=today.weekday()))
+    res = await session.execute(
+        select(MealPlan)
+        .where(MealPlan.user_id == user.id, MealPlan.week_start == week_start, MealPlan.status == "active")
+        .order_by(MealPlan.id.desc())
+        .limit(1)
+    )
+    plan = res.scalar_one_or_none()
+    if not plan:
+        return None
+    res = await session.execute(select(PlannedMeal).where(PlannedMeal.plan_id == plan.id))
+    by_day: dict[int, list[dict]] = {}
+    for m in res.scalars():
+        by_day.setdefault(m.day_index, []).append(
+            {"slot": m.slot, "name": m.name, "kcal": m.kcal, "protein_g": m.protein_g}
+        )
+    targets = await get_current_targets(session, user.id)
+    title = f"{user.name} — Haftalık Plan ({week_start.strftime('%d.%m')})"
+    return plan_image(
+        [{"day_index": d, "meals": meals} for d, meals in sorted(by_day.items())],
+        title,
+        targets.kcal if targets else None,
+        targets.protein_g if targets else None,
+    )

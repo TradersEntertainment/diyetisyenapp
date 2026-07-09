@@ -167,6 +167,43 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "get_energy_profile",
+        "description": (
+            "Kullanıcının enerji profilini getir: bazal metabolizma (BMR), tahmini günlük harcama (TDEE), "
+            "mevcut kalori hedefi, sistemin önerdiği güncel hedef ve protein tabanı. "
+            "Kalori/hedef konuşulurken veya yeni plan öncesi MUTLAKA bunu çağır; sayı uydurma."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "set_calorie_target",
+        "description": (
+            "Günlük kalori hedefini değiştir (kullanıcı onayıyla). Makrolar yeniden hesaplanır; "
+            "protein tabanı korunur — taban + minimum yağ için gereken kalorinin altına inilemez."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kcal": {"type": "integer", "description": "Yeni günlük kalori hedefi"},
+                "reason": {"type": "string", "description": "Kısa gerekçe"},
+            },
+            "required": ["kcal"],
+        },
+    },
+    {
+        "name": "apply_plan_day_to_week",
+        "description": (
+            "Aktif haftalık plandaki bir günün menüsünü haftanın 7 gününe kopyala "
+            "(kullanıcı her gün aynı beslenmek istediğinde). day_index: 0=Pazartesi ... 6=Pazar. "
+            "Alışveriş listesi otomatik güncellenir."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"day_index": {"type": "integer", "description": "Kopyalanacak kaynak gün (0-6)"}},
+            "required": ["day_index"],
+        },
+    },
+    {
         "name": "get_meal_plan",
         "description": "Aktif haftalık plandan bir günün öğünlerini getir. day_offset: 0=bugün, 1=yarın...",
         "input_schema": {
@@ -264,7 +301,8 @@ TOOLS: list[dict] = [
         "name": "regenerate_meal_plan",
         "description": (
             "Bu haftanın yemek planını baştan oluştur (kullanıcı yeni plan istediğinde veya plan yoksa). "
-            "Birkaç dakika sürebilir; kullanıcıya bekleyeceğini söyle."
+            "Kullanıcı kalori seviyesi belirtmediyse ÖNCE get_energy_profile ile sayıları paylaşıp "
+            "hangi kaloriyle hazırlayacağını teyit et. Birkaç dakika sürebilir; kullanıcıya bekleyeceğini söyle."
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -411,6 +449,128 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
                 "diet_strategy": targets.diet_strategy,
             }
         return json.dumps(payload, ensure_ascii=False, default=str)
+
+    if name == "get_energy_profile":
+        from app.services.calculations import (
+            bmi as bmi_fn,
+            bmr as bmr_fn,
+            effective_activity_level,
+            tdee as tdee_fn,
+        )
+        from app.services.targets import (
+            compute_targets_for_user,
+            get_profile,
+            latest_body_fat,
+            latest_weight,
+        )
+
+        profile = await get_profile(session, uid)
+        if not profile or not profile.height_cm or not profile.age:
+            return "HATA: profil eksik (boy/yaş yok)."
+        weight = await latest_weight(session, uid) or profile.start_weight_kg
+        if not weight:
+            return "HATA: kayıtlı kilo yok."
+        body_fat = await latest_body_fat(session, uid) or profile.body_fat_pct
+        bmi_value = bmi_fn(weight, profile.height_cm)
+        bmr_value = round(bmr_fn(weight, profile.height_cm, profile.age, profile.gender or "kadin", body_fat))
+        activity = profile.activity_level or "hafif_aktif"
+        eff_activity = effective_activity_level(activity, bmi_value)
+        tdee_value = round(tdee_fn(bmr_value, eff_activity))
+        recommended = await compute_targets_for_user(session, user)
+        current = await get_current_targets(session, uid)
+        payload = {
+            "guncel_kilo_kg": weight,
+            "bmi": bmi_value,
+            "bazal_metabolizma_kcal": bmr_value,
+            "beyan_edilen_aktivite": activity,
+            "hesapta_kullanilan_aktivite": eff_activity,
+            "tahmini_gunluk_harcama_kcal": tdee_value,
+            "mevcut_hedef_kcal": current.kcal if current else None,
+            "sistemin_onerdigi_guncel_hedef_kcal": recommended.kcal if recommended else None,
+            "protein_tabani_g": recommended.protein_floor_g if recommended else None,
+            "not": (
+                "Mevcut hedef ile önerilen hedef arasında belirgin fark varsa kullanıcıya söyle ve "
+                "onaylarsa set_calorie_target ile güncelle."
+            ),
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
+    if name == "set_calorie_target":
+        from app.services.targets import compute_targets_for_user, save_targets
+
+        kcal = int(p["kcal"])
+        targets = await compute_targets_for_user(session, user, kcal_override=kcal)
+        if not targets:
+            return "HATA: profil/kilo eksik, hedef hesaplanamadı."
+        current = await get_current_targets(session, uid)
+        row = await save_targets(
+            session,
+            uid,
+            targets,
+            diet_strategy=current.diet_strategy if current else "dengeli",
+            reason=p.get("reason") or "Kullanıcı isteğiyle kalori hedefi güncellendi.",
+        )
+        note = ""
+        if row.kcal != kcal:
+            note = f" (İstenen {kcal} kcal, protein tabanı + minimum yağ için {row.kcal} kcal'ye yükseltildi.)"
+        return (
+            f"Hedef güncellendi: {row.kcal} kcal, protein {row.protein_g} g, "
+            f"karbonhidrat {row.carb_g} g, yağ {row.fat_g} g.{note}"
+        )
+
+    if name == "apply_plan_day_to_week":
+        from app.services.shopping import build_weekly_shopping_list
+
+        day_index = int(p["day_index"])
+        if not 0 <= day_index <= 6:
+            return "HATA: day_index 0-6 olmalı."
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+        res = await session.execute(
+            select(MealPlan)
+            .where(MealPlan.user_id == uid, MealPlan.week_start == week_start, MealPlan.status == "active")
+            .order_by(MealPlan.id.desc())
+            .limit(1)
+        )
+        plan = res.scalar_one_or_none()
+        if not plan:
+            return "HATA: bu hafta için aktif plan yok."
+        res = await session.execute(
+            select(PlannedMeal).where(PlannedMeal.plan_id == plan.id)
+        )
+        all_meals = list(res.scalars())
+        template = [m for m in all_meals if m.day_index == day_index]
+        if not template:
+            return f"HATA: planın {day_index}. gününde öğün yok."
+        for m in all_meals:
+            if m.day_index != day_index:
+                await session.delete(m)
+        for target_day in range(7):
+            if target_day == day_index:
+                continue
+            for m in template:
+                session.add(
+                    PlannedMeal(
+                        plan_id=plan.id,
+                        day_index=target_day,
+                        slot=m.slot,
+                        name=m.name,
+                        recipe=m.recipe,
+                        prep_minutes=m.prep_minutes,
+                        kcal=m.kcal,
+                        protein_g=m.protein_g,
+                        carb_g=m.carb_g,
+                        fat_g=m.fat_g,
+                        fiber_g=m.fiber_g,
+                        ingredients=m.ingredients,
+                        alternatives=m.alternatives,
+                        shared_with_partner=m.shared_with_partner,
+                    )
+                )
+        await session.flush()
+        await build_weekly_shopping_list(session, week_start)
+        day_names = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+        return f"{day_names[day_index]} menüsü haftanın 7 gününe uygulandı; alışveriş listesi güncellendi."
 
     if name == "get_meal_plan":
         day = date.today() + timedelta(days=int(p.get("day_offset", 0)))

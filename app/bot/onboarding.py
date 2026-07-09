@@ -448,15 +448,30 @@ async def _finish(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         session.add(WeightLog(user_id=user.id, weight_kg=profile.start_weight_kg))
 
     bf_line = f"• Yağ oranı: %{body_fat:g}\n" if body_fat else ""
+    energy_line = ""
+    try:
+        from app.services.calculations import bmi as bmi_fn, bmr as bmr_fn, effective_activity_level, tdee as tdee_fn
+
+        bmr_v = round(bmr_fn(profile.start_weight_kg, profile.height_cm, profile.age, profile.gender or "kadin", body_fat))
+        eff = effective_activity_level(
+            profile.activity_level or "hafif_aktif", bmi_fn(profile.start_weight_kg, profile.height_cm)
+        )
+        tdee_v = round(tdee_fn(bmr_v, eff))
+        energy_line = f"• Bazal metabolizma: ~{bmr_v} kcal | Tahmini günlük harcama: ~{tdee_v} kcal\n"
+    except Exception:
+        pass
     display_name = answers.get("name") or update.effective_user.first_name or ""
     who = f"{display_name}, harika" if _in_group(update) and display_name else "Harika"
     await update.effective_chat.send_message(
         f"{who}, tanıştığımıza memnun oldum! 🎉 İşte başlangıç hedeflerin:\n\n"
+        f"{energy_line}"
         f"• Kalori: {targets.kcal} kcal/gün\n"
         f"• Protein: {targets.protein_g} g/gün  (taban: {targets.protein_floor_g} g — bunun altına asla inmeyiz 💪)\n"
         f"• Karbonhidrat: {targets.carb_g} g | Yağ: {targets.fat_g} g | Lif: {targets.fiber_g} g\n"
         f"• Su: {targets.water_ml} ml/gün\n"
         f"{bf_line}\n"
+        "Kalori hedefin, günlük harcamandan güvenli bir açıkla hesaplandı; istersen "
+        "\"kalorimi 2200 yap\" gibi yazarak birlikte değiştirebiliriz. "
         "Protein hedefin vücut analizine göre hesaplandı ve her tartıda güncellenecek. "
         "Diyet tarzını ise sabitlemiyorum — gidişata göre birlikte şekillendireceğiz.\n\n"
         "Şimdi ilk haftalık planını hazırlıyorum, birkaç dakika sürebilir... 🍽️"

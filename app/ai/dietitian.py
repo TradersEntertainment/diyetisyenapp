@@ -5,7 +5,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import get_client, get_model
+from app.ai.client import get_client, get_model, get_plan_model
 from app.ai.context import build_user_context
 from app.ai.prompts import DIETITIAN_PERSONA, STRATEGY_DECISION_PROMPT
 from app.ai.tools import TOOLS, execute_tool
@@ -55,7 +55,17 @@ async def _load_history(session: AsyncSession, user_id: int) -> list[dict]:
         .limit(HISTORY_MESSAGES)
     )
     rows = list(res.scalars())[::-1]
-    return [{"role": r.role, "content": r.content} for r in rows if r.content.strip()]
+    # Merge consecutive same-role rows (scheduled messages are stored as extra
+    # assistant turns) — the API requires alternating roles.
+    merged: list[dict] = []
+    for r in rows:
+        if not r.content.strip():
+            continue
+        if merged and merged[-1]["role"] == r.role:
+            merged[-1]["content"] += "\n\n" + r.content
+        else:
+            merged.append({"role": r.role, "content": r.content})
+    return merged
 
 
 async def chat(
@@ -136,8 +146,15 @@ async def generate_message(
     *,
     include_context: bool = True,
     group_mode: bool = False,
+    include_recent_dialogue: bool = False,
+    store_in_history: bool = False,
 ) -> str:
-    """One-shot Turkish message (greetings, reports, motivational nudges). No tools."""
+    """One-shot Turkish message (greetings, reports, motivational nudges). No tools.
+
+    include_recent_dialogue feeds the last few conversation turns so scheduled
+    messages don't repeat yesterday's phrasing or re-ask answered questions;
+    store_in_history writes the produced message back as an assistant turn.
+    """
     client = get_client()
     system: list[dict] = [
         {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}}
@@ -145,6 +162,28 @@ async def generate_message(
     if include_context:
         context = await build_user_context(session, user)
         system.append({"type": "text", "text": "# KULLANICI BAĞLAMI\n\n" + context})
+    if include_recent_dialogue:
+        res = await session.execute(
+            select(ConversationMessage)
+            .where(ConversationMessage.user_id == user.id)
+            .order_by(ConversationMessage.ts.desc(), ConversationMessage.id.desc())
+            .limit(8)
+        )
+        rows = list(res.scalars())[::-1]
+        if rows:
+            transcript = "\n".join(
+                f"{'K' if r.role == 'user' else 'Sen'}: {r.content[:300]}" for r in rows
+            )
+            system.append(
+                {
+                    "type": "text",
+                    "text": (
+                        "# SON KONUŞMALAR (kendini tekrar etme!)\n"
+                        "Aşağıda son mesajlaşmalar var. Aynı kalıpları/cümleleri KULLANMA, "
+                        "daha önce sorduğun ve cevabını aldığın şeyleri TEKRAR SORMA:\n\n" + transcript
+                    ),
+                }
+            )
     if group_mode:
         system.append(
             {
@@ -167,7 +206,10 @@ async def generate_message(
         return ""
     if response.stop_reason == "refusal":
         return ""
-    return next((b.text.strip() for b in response.content if b.type == "text"), "")
+    text = next((b.text.strip() for b in response.content if b.type == "text"), "")
+    if store_in_history and text and "[SESSIZ]" not in text:
+        session.add(ConversationMessage(user_id=user.id, role="assistant", content=text))
+    return text
 
 
 STRATEGY_SCHEMA = {
@@ -220,7 +262,7 @@ async def decide_strategy(
     context = await build_user_context(session, user)
     try:
         response = await client.messages.create(
-            model=get_model(),
+            model=get_plan_model(),
             max_tokens=4000,
             system=[
                 {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}},
