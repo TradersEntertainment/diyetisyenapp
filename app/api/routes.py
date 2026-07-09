@@ -585,7 +585,7 @@ _plan_jobs: dict[int, str] = {}  # user_id -> "running" | "done" | "error"
 async def _regenerate_plan_bg(user_id: int, app) -> None:
     import logging
 
-    from app.services.mealplan import extract_dinners, generate_weekly_plan
+    from app.services.mealplan import extract_menu, generate_weekly_plan
     from app.services.shopping import build_weekly_shopping_list
 
     log = logging.getLogger(__name__)
@@ -603,11 +603,11 @@ async def _regenerate_plan_bg(user_id: int, app) -> None:
                 )
             )
             partner_plan = res.scalars().first()
-            partner_dinners = None
+            partner_menu = None
             if partner_plan:
                 await session.refresh(partner_plan, ["meals"])
-                partner_dinners = extract_dinners(partner_plan.meals)
-            plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
+                partner_menu = extract_menu(partner_plan.meals)
+            plan = await generate_weekly_plan(session, user, week_start, partner_menu)
             if plan:
                 await build_weekly_shopping_list(session, week_start)
             user_name = user.name

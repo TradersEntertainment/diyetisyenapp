@@ -182,7 +182,7 @@ async def generate_weekly_plan(
     session: AsyncSession,
     user: User,
     week_start: date | None = None,
-    partner_dinners: list[dict] | None = None,
+    partner_menu: list[dict] | None = None,
 ) -> MealPlan | None:
     """Generate + persist one user's weekly plan. Returns None if prerequisites missing."""
     today = date.today()
@@ -198,11 +198,20 @@ async def generate_weekly_plan(
 
     night_snack = "" if profile.eats_snacks else "Gece atıştırması ekleme."
     partner_block = ""
-    if partner_dinners:
+    if partner_menu:
+        slot_lines: dict[int, list[str]] = {}
+        for d in partner_menu:
+            slot_lines.setdefault(d["day_index"], []).append(f"{d['slot']}: {d['name']}")
+        menu_text = "\n".join(
+            f"- Gün {day}: " + " | ".join(items) for day, items in sorted(slot_lines.items())
+        )
         partner_block = (
-            "\n## Ev arkadaşının akşam yemekleri (uyumlu olursa aynı yemeği iki kişilik planla, "
-            "shared_with_partner=true yap; makroları bu kullanıcının hedefine göre porsiyonla):\n"
-            + "\n".join(f"- Gün {d['day_index']}: {d['name']}" for d in partner_dinners)
+            "\n## Ev arkadaşının haftalık menüsü — İKİSİ HER ÖĞÜNÜ BERABER YİYOR\n"
+            "AYNI yemekleri, aynı gün ve öğünlerde kullan (yemek adları birebir aynı olsun, "
+            "shared_with_partner=true). SADECE porsiyonları bu kullanıcının kendi hedeflerine göre "
+            "ayarla; kalori/makro/malzeme miktarları bu kullanıcının porsiyonuna göre olsun. "
+            "Bu kullanıcının 'asla' yiyecekleriyle çakışan bir yemek varsa yalnızca o öğünü değiştir:\n"
+            + menu_text
         )
 
     prompt = f"""7 günlük (Pazartesi=0 ... Pazar=6) kişisel yemek planı oluştur.
@@ -216,7 +225,10 @@ async def generate_weekly_plan(
 ## Öğün yapısı
 Her gün: kahvalti, ara_ogun_1, ogle, ara_ogun_2, aksam{"" if night_snack else ", istenirse gece_atistirmasi"}.
 {night_snack}
-Her öğünde: isim, KISA tarif (2-4 cümle), hazırlık süresi, kalori+makrolar+lif, malzemeler
+Her öğünde: isim, KISA tarif, hazırlık süresi, kalori+makrolar+lif, malzemeler.
+ÖNEMLİ — PORSİYON: Her öğünün recipe alanı bu kullanıcının porsiyon miktarlarıyla BAŞLASIN
+(örn: "Porsiyon: 250 g tavuk göğsü, 150 g haşlanmış bulgur, 1 kase cacık."), sonra 1-3 cümle
+hazırlanış gelsin. Malzemeler de aynı porsiyona göre
 (alışveriş listesi için gerçekçi miktarlarla) ve 1-2 alternatif.
 
 ## Kişiselleştirme verileri
@@ -323,24 +335,26 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
     return plan
 
 
-def extract_dinners(plan_data_meals: list[PlannedMeal]) -> list[dict]:
+def extract_menu(plan_data_meals: list[PlannedMeal]) -> list[dict]:
+    """The full weekly menu (every slot) — the household eats the SAME dishes,
+    only portions differ, so the partner's generation copies this menu."""
     return [
-        {"day_index": m.day_index, "name": m.name}
+        {"day_index": m.day_index, "slot": m.slot, "name": m.name}
         for m in plan_data_meals
-        if m.slot == "aksam"
     ]
 
 
 async def generate_household_plans(session: AsyncSession, users: list[User], week_start: date | None = None) -> list[MealPlan]:
-    """Generate plans for both users; the second plan aligns dinners with the first."""
+    """Generate plans for both users; the second user gets the SAME menu,
+    portioned to their own targets."""
     plans: list[MealPlan] = []
-    partner_dinners: list[dict] | None = None
+    partner_menu: list[dict] | None = None
     for user in users:
-        plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
+        plan = await generate_weekly_plan(session, user, week_start, partner_menu)
         if plan:
             plans.append(plan)
             await session.refresh(plan, ["meals"])
-            partner_dinners = extract_dinners(plan.meals)
+            partner_menu = extract_menu(plan.meals)
     return plans
 
 

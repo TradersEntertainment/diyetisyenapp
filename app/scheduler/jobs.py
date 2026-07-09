@@ -19,7 +19,7 @@ from app.config import get_settings
 from app.db import session_scope
 from app.models import ReminderSetting, User
 from app.services.adaptive import apply_adjustments, decide_adjustments
-from app.services.mealplan import extract_dinners, generate_weekly_plan, render_week_plan_png
+from app.services.mealplan import extract_menu, generate_weekly_plan, render_week_plan_png
 from app.services.reports import (
     daily_facts,
     format_weekly_stats_tr,
@@ -178,9 +178,9 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         text = await generate_message(
             session,
             user,
-            "Kısa, samimi bir günaydın mesajı yaz: bugünün plandaki öğünlerini 1'er satırla hatırlat, "
-            "günün su ve protein hedefini söyle, motive edici tek cümleyle bitir. Emoji kullan ama abartma."
-            + streak_note,
+            "Kısa, samimi bir günaydın mesajı yaz: bugünün plandaki öğünlerini 1'er satırla hatırlat "
+            "(menü evde ortak — 'bugün akşama X yapıyoruz, beraber' tonunda yaz), günün su ve protein "
+            "hedefini söyle, motive edici tek cümleyle bitir. Emoji kullan ama abartma." + streak_note,
             group_mode=is_group,
             include_recent_dialogue=True,
             store_in_history=True,
@@ -437,14 +437,14 @@ async def weekly_review(application: Application) -> None:
             except Exception:
                 log.exception("weekly review failed for user %s", user.id)
 
-        # Generate next week's plans (second user's dinners aligned with the first's)
-        partner_dinners = None
+        # Generate next week's plans (both users share one menu, portioned per person)
+        partner_menu = None
         for user in users:
             try:
-                plan = await generate_weekly_plan(session, user, next_monday, partner_dinners)
+                plan = await generate_weekly_plan(session, user, next_monday, partner_menu)
                 if plan:
                     await session.refresh(plan, ["meals"])
-                    partner_dinners = extract_dinners(plan.meals)
+                    partner_menu = extract_menu(plan.meals)
                     await _send(
                         application,
                         session,
@@ -526,6 +526,57 @@ async def nightly_backup() -> None:
         log.exception("backup job crashed")
 
 
+# ------------------------------------------------------------------ household plan regen
+
+
+async def household_regenerate(application: Application, primary_telegram_id: int) -> None:
+    """Regenerate this week's plans for the WHOLE household (same menu, per-person
+    portions), rebuild the shopping list, and post announcements + plan images.
+
+    Triggered from chat via the regenerate_meal_plan tool; runs as a background
+    task so the conversation isn't blocked for minutes.
+    """
+    today = date.today()
+    week_start = today - timedelta(days=today.weekday())
+    try:
+        async with session_scope() as session:
+            users = await _active_users(session)
+            # The requester's plan drives the shared menu.
+            users.sort(key=lambda u: u.telegram_id != primary_telegram_id)
+            partner_menu = None
+            generated: list[User] = []
+            for user in users:
+                plan = await generate_weekly_plan(session, user, week_start, partner_menu)
+                if plan:
+                    await session.refresh(plan, ["meals"])
+                    partner_menu = extract_menu(plan.meals)
+                    generated.append(user)
+            if generated:
+                await build_weekly_shopping_list(session, week_start)
+
+        if not generated:
+            async with session_scope() as session:
+                res = await session.execute(select(User).where(User.telegram_id == primary_telegram_id))
+                user = res.scalar_one_or_none()
+                if user:
+                    await _send(application, session, user,
+                                "planı şu an oluşturamadım 😕 Birazdan tekrar dener misin?", mention=True)
+            return
+
+        async with session_scope() as session:
+            names = " ve ".join(u.name for u in generated if u.name)
+            chat_id, _ = await _resolve_chat(session, generated[0])
+            await _send_to(
+                application, chat_id,
+                f"📋 Yeni haftalık planlarınız hazır ({names})! Menü ortak, porsiyonlar kişiye özel. "
+                "🛒 Alışveriş listesi de güncellendi (/alisveris).",
+            )
+            for user in generated:
+                await _send_plan_image(application, session, user, week_start)
+    except Exception:
+        log.exception("household plan regeneration failed")
+
+
 # ------------------------------------------------------------------ post-onboarding plan
 
 
@@ -547,7 +598,7 @@ async def generate_plan_for_user_bg(telegram_id: int, application: Application) 
             today = date.today()
             week_start = today - timedelta(days=today.weekday())
 
-            partner_dinners = None
+            partner_menu = None
             res = await session.execute(
                 select(MealPlan).where(
                     MealPlan.week_start == week_start,
@@ -558,9 +609,9 @@ async def generate_plan_for_user_bg(telegram_id: int, application: Application) 
             partner_plan = res.scalars().first()
             if partner_plan:
                 await session.refresh(partner_plan, ["meals"])
-                partner_dinners = extract_dinners(partner_plan.meals)
+                partner_menu = extract_menu(partner_plan.meals)
 
-            plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
+            plan = await generate_weekly_plan(session, user, week_start, partner_menu)
             if plan:
                 await build_weekly_shopping_list(session, week_start)
         prefix = f"{name}, " if name else ""

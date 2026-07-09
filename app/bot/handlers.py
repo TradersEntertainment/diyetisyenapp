@@ -273,6 +273,11 @@ async def cmd_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total_p = sum(m.protein_g for m in day_meals)
         for m in day_meals:
             lines.append(f"{slot_names.get(m.slot, m.slot)}: {m.name} — {m.kcal} kcal, P{m.protein_g:g}")
+            # Today's view shows the personal portion (recipes start with it).
+            if not whole_week and m.recipe:
+                portion = m.recipe.split(".")[0].strip()
+                if portion:
+                    lines.append(f"  ↳ _{portion[:150]}_")
         lines.append(f"_Toplam: {total_kcal} kcal, protein {total_p:g} g_")
         return "\n".join(lines)
 
@@ -682,14 +687,17 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from app.services.mealplan import render_week_plan_png
 
         try:
+            bufs = []
             async with session_scope() as session:
-                res = await session.execute(
-                    select(User).where(User.telegram_id == update.effective_user.id)
-                )
-                buf = await render_week_plan_png(session, res.scalar_one())
-            if buf:
+                # The household shares one menu — show both tables in the group.
+                res = await session.execute(select(User).where(User.onboarding_state == "active"))
+                for u in res.scalars():
+                    buf = await render_week_plan_png(session, u)
+                    if buf:
+                        bufs.append(buf)
+            for buf in bufs:
                 await update.effective_chat.send_photo(photo=buf)
-            else:
+            if not bufs:
                 await update.effective_chat.send_message("Bu hafta için görselleştirecek plan bulamadım. 🙈")
         except Exception:
             log.exception("plan image send failed")

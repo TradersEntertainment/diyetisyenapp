@@ -317,9 +317,10 @@ TOOLS: list[dict] = [
     {
         "name": "regenerate_meal_plan",
         "description": (
-            "Bu haftanın yemek planını baştan oluştur (kullanıcı yeni plan istediğinde veya plan yoksa). "
-            "Kullanıcı kalori seviyesi belirtmediyse ÖNCE get_energy_profile ile sayıları paylaşıp "
-            "hangi kaloriyle hazırlayacağını teyit et. Birkaç dakika sürebilir; kullanıcıya bekleyeceğini söyle."
+            "Bu haftanın yemek planlarını EV HALKI İÇİN baştan oluştur (ortak menü, kişiye özel "
+            "porsiyonlar; iki kullanıcı için de yenilenir). Arka planda çalışır, bitince tablolar "
+            "gruba otomatik gönderilir. Kullanıcı kalori/tempo belirtmediyse ÖNCE get_energy_profile "
+            "ile sayıları paylaşıp teyit et."
         ),
         "input_schema": {"type": "object", "properties": {}},
     },
@@ -770,28 +771,19 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
         return format_list_tr(items)
 
     if name == "regenerate_meal_plan":
-        from app.services.mealplan import extract_dinners, generate_weekly_plan
-        from app.services.shopping import build_weekly_shopping_list
+        import asyncio
 
-        today = date.today()
-        week_start = today - timedelta(days=today.weekday())
-        res = await session.execute(
-            select(MealPlan).where(
-                MealPlan.week_start == week_start,
-                MealPlan.status == "active",
-                MealPlan.user_id != uid,
-            )
+        from app.bot.bot import APPLICATION
+        from app.scheduler.jobs import household_regenerate
+
+        if APPLICATION is None:
+            return "HATA: bot çalışmıyor, plan üretimi başlatılamadı."
+        asyncio.create_task(household_regenerate(APPLICATION, user.telegram_id))
+        return (
+            "Ev halkının yeni haftalık planları arka planda hazırlanıyor (ortak menü, kişiye özel "
+            "porsiyonlar). Birkaç dakika sürer; hazır olunca tablolar gruba otomatik gelecek. "
+            "Kullanıcıya bekleyeceğini söyle."
         )
-        partner_plan = res.scalars().first()
-        partner_dinners = None
-        if partner_plan:
-            await session.refresh(partner_plan, ["meals"])
-            partner_dinners = extract_dinners(partner_plan.meals)
-        plan = await generate_weekly_plan(session, user, week_start, partner_dinners)
-        if not plan:
-            return "HATA: plan oluşturulamadı (profil veya hedefler eksik olabilir)."
-        await build_weekly_shopping_list(session, week_start)
-        return "Yeni haftalık plan oluşturuldu ve alışveriş listesi güncellendi."
 
     if name == "set_reminder_time":
         from datetime import time as dtime

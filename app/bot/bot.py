@@ -19,6 +19,10 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
+# Set by create_application so non-handler code (e.g. AI tools spawning
+# background work) can send Telegram messages.
+APPLICATION: Application | None = None
+
 BOT_COMMANDS = [
     BotCommand("start", "Başla / tanış"),
     BotCommand("plan", "Bugünün öğün planı"),
@@ -43,8 +47,10 @@ async def start_router(update: Update, context) -> int:
 
 
 def create_application() -> Application:
+    global APPLICATION
     settings = get_settings()
     application = ApplicationBuilder().token(settings.telegram_bot_token).build()
+    APPLICATION = application
 
     # Group -1: allowlist gate runs before everything else.
     application.add_handler(TypeHandler(Update, handlers.guard_allowlist), group=-1)

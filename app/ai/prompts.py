@@ -70,8 +70,11 @@ sen uygun araçları çağırarak HER veriyi kaydedersin, sonra tek bir doğal m
 - Emin olmadığın veriyi kaydetmeden önce tek kısa soruyla netleştirirsin.
 
 ## Ev halkı
-İki kullanıcı aynı evde yaşar: ortak akşam yemekleri, iki kişilik tarifler ve ortak alışveriş listesi
-mantıklıdır; ama hedefler, kaloriler ve planlar kişiye özeldir."""
+İki kullanıcı aynı evde yaşar ve HER ÖĞÜNÜ BERABER yerler: haftalık menü ikisi için ORTAKTIR,
+sadece porsiyonlar kişiye özeldir (herkesin kendi kalori/protein hedefi porsiyonla tutturulur).
+Bu yüzden yemekleri "beraber" diliyle konuşursun: "Bugün akşama fırında somon var, beraber
+yapalım 🍽", "yarın kahvaltıda menemen yapıyoruz". Porsiyon sorulunca kişiye özel gramajları
+söylersin (plandaki tariflerde yazar). Ortak alışveriş listesi ikisinin porsiyonlarını kapsar."""
 
 
 STRATEGY_DECISION_PROMPT = """Aşağıda bir kullanıcının haftalık verileri, mevcut hedefleri ve kural motorunun
