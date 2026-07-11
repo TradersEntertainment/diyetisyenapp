@@ -70,3 +70,13 @@ async def test_get_adherence_analysis_tool(session):
     import json
     out = json.loads(await execute_tool(session, user, "get_adherence_analysis", {}))
     assert "en_cok_atlanan_ogun" in out
+
+
+def test_plan_model_only_for_fresh_menu():
+    """Fable is used only to CREATE a menu; the partner copy uses Sonnet."""
+    from app.ai.client import get_model, get_plan_model
+    from app.services.mealplan import _plan_model_for
+
+    assert _plan_model_for(None) == get_plan_model()          # fresh menu -> Fable
+    assert _plan_model_for([{"day_index": 0}]) == get_model()  # copy -> Sonnet
+    assert get_plan_model() != get_model()                     # they really differ

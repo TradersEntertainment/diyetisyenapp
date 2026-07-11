@@ -5,7 +5,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import get_client, get_model, get_plan_model
+from app.ai.client import get_client, get_model
 from app.ai.context import build_user_context
 from app.ai.prompts import DIETITIAN_PERSONA, STRATEGY_DECISION_PROMPT
 from app.ai.tools import TOOLS, execute_tool
@@ -262,7 +262,9 @@ async def decide_strategy(
     context = await build_user_context(session, user)
     try:
         response = await client.messages.create(
-            model=get_plan_model(),
+            # Sonnet: strategy pick is a small task; keep the pricey plan model
+            # strictly for meal-plan JSON generation.
+            model=get_model(),
             max_tokens=4000,
             system=[
                 {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}},

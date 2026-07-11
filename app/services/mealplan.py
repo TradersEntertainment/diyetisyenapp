@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.client import get_client, get_plan_model
+from app.ai.client import get_client, get_model, get_plan_model
 from app.ai.prompts import DIETITIAN_PERSONA
 from app.models import Food, FoodPreference, MealLog, MealPlan, PlannedMeal, User
 from app.services.reports import get_current_targets
@@ -231,6 +231,13 @@ def validate_plan_single_meat(plan_data: dict) -> dict[int, list[str]]:
     return bad
 
 
+def _plan_model_for(partner_menu) -> str:
+    """The pricey plan model (Fable) only CREATES a fresh menu. The second
+    household member copies that same menu and just re-portions it, which the
+    cheaper chat model (Sonnet) does fine — so partner plans cost far less."""
+    return get_model() if partner_menu else get_plan_model()
+
+
 def validate_plan_kcal(plan_data: dict, target_kcal: int, tolerance: float = 0.10) -> list[int]:
     """Return the day_indexes whose total kcal is off the target by > tolerance."""
     bad = []
@@ -344,8 +351,8 @@ Türk ve Akdeniz mutfağı ağırlıklı, pratik bir hafta hazırla; kullanıcı
     for attempt in range(3):
         try:
             async with client.messages.stream(
-                model=get_plan_model(),
-                max_tokens=64000,
+                model=_plan_model_for(partner_menu),
+                max_tokens=24000,
                 system=[
                     {"type": "text", "text": DIETITIAN_PERSONA, "cache_control": {"type": "ephemeral"}}
                 ],
