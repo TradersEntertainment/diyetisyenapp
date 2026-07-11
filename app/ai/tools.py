@@ -1039,7 +1039,6 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
     if name == "get_adherence_analysis":
         from datetime import datetime as _dt, timezone as _tz
 
-        from app.models import HungerLog, MealLog
         from app.services.analysis import adherence_breakdown
 
         since = _dt.now(_tz.utc) - timedelta(days=7)
@@ -1061,8 +1060,6 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
         return json.dumps(breakdown, ensure_ascii=False)
 
     if name == "get_dining_out_context":
-        from app.models import MealLog
-
         from datetime import datetime as _dt, time as _t, timezone as _tz
 
         targets = await get_current_targets(session, uid)

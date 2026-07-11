@@ -114,3 +114,22 @@ async def test_set_voice_replies_toggles_profile(session):
     assert "AÇILDI" in r
     prof = (await session.execute(select(Profile).where(Profile.user_id == user.id))).scalar_one()
     assert prof.voice_replies is True
+
+
+async def test_log_meal_works_after_adherence_call(session):
+    """Regression: a local 'from app.models import MealLog' in a later dispatch
+    branch made MealLog function-local, breaking log_meal with UnboundLocalError."""
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import MealLog as ML
+
+    user = await _user(session, tg=777)
+    # Touch the branch that previously shadowed MealLog...
+    await execute_tool(session, user, "get_adherence_analysis", {})
+    # ...then log a meal in the same dispatch module scope.
+    r = await execute_tool(session, user, "log_meal", {
+        "description": "kıyma kavurma + lavaş", "kcal": 720, "protein_g": 45, "carb_g": 40, "fat_g": 30,
+    })
+    assert "HATA" not in r
+    meals = list((await session.execute(select(ML).where(ML.user_id == user.id))).scalars())
+    assert len(meals) == 1 and meals[0].kcal == 720
