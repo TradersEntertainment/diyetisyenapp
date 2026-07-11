@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     stt_model: str = "whisper-large-v3"
 
+    # Text-to-speech (voice replies). Only active when the key is set; removing
+    # the key just stops voice, text keeps working.
+    elevenlabs_api_key: str = ""
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    elevenlabs_model: str = "eleven_multilingual_v2"
+
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"

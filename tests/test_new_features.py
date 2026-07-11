@@ -80,3 +80,37 @@ def test_plan_model_only_for_fresh_menu():
     assert _plan_model_for(None) == get_plan_model()          # fresh menu -> Fable
     assert _plan_model_for([{"day_index": 0}]) == get_model()  # copy -> Sonnet
     assert get_plan_model() != get_model()                     # they really differ
+
+
+def test_tts_unavailable_without_key(monkeypatch):
+    from app.ai import tts
+    from app.config import Settings
+
+    monkeypatch.setattr(tts, "get_settings", lambda: Settings(elevenlabs_api_key=""))
+    assert tts.tts_available() is False
+
+
+def test_tts_clean_for_speech_strips_markup_and_emoji():
+    from app.ai.tts import clean_for_speech
+
+    out = clean_for_speech("*Merhaba* Ömer 💪 bugün harika! [SESSIZ] https://x.co")
+    assert "*" not in out and "💪" not in out and "[SESSIZ]" not in out
+    assert "http" not in out
+    assert "Merhaba" in out and "Ömer" in out
+
+
+async def test_set_voice_replies_toggles_profile(session):
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import Profile, User
+
+    user = User(telegram_id=555, name="Ses", onboarding_state="active")
+    session.add(user)
+    await session.flush()
+    session.add(Profile(user_id=user.id))
+    await session.flush()
+
+    r = await execute_tool(session, user, "set_voice_replies", {"enabled": True})
+    assert "AÇILDI" in r
+    prof = (await session.execute(select(Profile).where(Profile.user_id == user.id))).scalar_one()
+    assert prof.voice_replies is True

@@ -4,9 +4,10 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# postgresql-client provides pg_dump for scheduled backups
+# postgresql-client provides pg_dump for scheduled backups;
+# ffmpeg converts TTS mp3 -> ogg/opus for Telegram voice notes
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client curl \
+    && apt-get install -y --no-install-recommends postgresql-client curl ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv/diyetisyen

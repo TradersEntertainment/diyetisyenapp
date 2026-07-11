@@ -591,6 +591,48 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
 
 
+async def _voice_enabled(telegram_id: int) -> bool:
+    from app.services.targets import get_profile
+
+    try:
+        async with session_scope() as session:
+            res = await session.execute(select(User).where(User.telegram_id == telegram_id))
+            u = res.scalar_one_or_none()
+            if not u:
+                return False
+            profile = await get_profile(session, u.id)
+            return bool(profile and profile.voice_replies)
+    except Exception:
+        return False
+
+
+async def _send_reply(update: Update, reply: str, group_mode: bool, voice_on: bool) -> None:
+    """Always send the text reply; add a voice note when the user enabled it."""
+    for i in range(0, len(reply), 4000):
+        await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
+    if not voice_on:
+        return
+    from app.ai.tts import synthesize, tts_available
+
+    if not tts_available():
+        return
+    try:
+        result = await synthesize(reply)
+        if not result:
+            return
+        audio, fmt = result
+        import io
+
+        buf = io.BytesIO(audio)
+        buf.name = f"cevap.{'ogg' if fmt == 'ogg' else 'mp3'}"
+        if fmt == "ogg":
+            await update.effective_chat.send_voice(voice=buf)
+        else:
+            await update.effective_chat.send_audio(audio=buf, title="Diyetisyen")
+    except Exception:
+        log.exception("voice reply send failed")  # text already sent; ignore
+
+
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Transcribe a voice/audio message and run it through the normal chat flow."""
     user = await get_user(update.effective_user.id)
@@ -633,8 +675,8 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Show a short transcript so they can see how the voice was understood.
     if len(text) <= 200:
         await update.message.reply_text(f"🎙 _{text}_", parse_mode="Markdown", do_quote=group_mode)
-    for i in range(0, len(reply), 4000):
-        await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
+    voice_on = await _voice_enabled(update.effective_user.id)
+    await _send_reply(update, reply, group_mode, voice_on)
 
 
 async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -734,9 +776,8 @@ async def chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if send_plan_image:
         reply = reply.replace("[PLAN_GORSEL]", "").strip()
 
-    for i in range(0, len(reply), 4000):
-        # In the group, quote the message being answered so it's clear who it's for.
-        await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
+    voice_on = await _voice_enabled(update.effective_user.id)
+    await _send_reply(update, reply, group_mode, voice_on)
 
     if send_plan_image:
         from app.services.mealplan import render_week_plan_png

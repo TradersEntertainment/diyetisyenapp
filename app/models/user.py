@@ -50,6 +50,8 @@ class Profile(Base):
     # When true, water reminders auto-log a glass and just notify (opt-out),
     # instead of asking the user to confirm/tap each time.
     auto_water: Mapped[bool] = mapped_column(default=False)
+    # When true, chat replies also come as a voice note (text is always sent too).
+    voice_replies: Mapped[bool] = mapped_column(default=False)
 
     # --- Health ---
     diseases: Mapped[str | None] = mapped_column(String(1000))

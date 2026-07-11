@@ -416,6 +416,18 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "set_voice_replies",
+        "description": (
+            "Sesli cevabı aç/kapat. Kullanıcı 'sesli de cevap ver / sesini duyayım' derse aç, "
+            "'sesli cevabı kapat / sadece yaz' derse kapat. Yazı her zaman gönderilir; ses sadece ek."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+        },
+    },
+    {
         "name": "adjust_water",
         "description": (
             "Bugünkü su kaydını düzelt. Kullanıcı otomatik eklenen suyu içmediyse ('su içmedim') "
@@ -1088,6 +1100,20 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
                 "sadece haber vereceğim; tıklaman gerekmeyecek. İçmediğin olursa 'su içmedim' de."
             )
         return "Otomatik su takibi KAPATILDI. Yine tek dokunuşluk butonlarla soracağım."
+
+    if name == "set_voice_replies":
+        from app.services.targets import get_profile
+
+        profile = await get_profile(session, uid)
+        if not profile:
+            return "HATA: profil bulunamadı."
+        profile.voice_replies = bool(p["enabled"])
+        if profile.voice_replies:
+            return (
+                "Sesli cevap AÇILDI. Bundan sonra yazının yanına kısa bir ses notu da ekleyeceğim. "
+                "Kapatmak istersen 'sesli cevabı kapat' de."
+            )
+        return "Sesli cevap KAPATILDI. Yalnızca yazıyla devam."
 
     if name == "adjust_water":
         session.add(WaterLog(user_id=uid, amount_ml=int(p["amount_ml"])))
