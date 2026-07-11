@@ -168,3 +168,25 @@ async def test_adjust_water_negative_reverses(session):
     await execute_tool(session, user, "adjust_water", {"amount_ml": -250})
     logs = list((await session.execute(select(WaterLog).where(WaterLog.user_id == user.id))).scalars())
     assert len(logs) == 1 and logs[0].amount_ml == -250
+
+
+async def test_pin_meal_slot_keeps_other_slots(session):
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import PlannedMeal
+
+    user, plan = await _make_user_with_plan(session)
+    # _make_user_with_plan gives days 0,1,2 with kahvalti+aksam ("Menü A/B/Favori Menü").
+    r = await execute_tool(session, user, "pin_meal_slot", {"slot": "kahvalti", "source_day_index": 2})
+    assert "sabitlendi" in r
+
+    res = await session.execute(select(PlannedMeal).where(PlannedMeal.plan_id == plan.id))
+    meals = list(res.scalars())
+    kahvalti = [m for m in meals if m.slot == "kahvalti"]
+    aksam = [m for m in meals if m.slot == "aksam"]
+    # Breakfast is now the pinned one on all 7 days...
+    assert len(kahvalti) == 7
+    assert all(m.name == "Favori Menü kahvalti" for m in kahvalti)
+    # ...while dinners are untouched (still only the original 3 days).
+    assert {m.day_index for m in aksam} == {0, 1, 2}
+    assert any(m.name == "Menü A aksam" for m in aksam)

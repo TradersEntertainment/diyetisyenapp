@@ -221,6 +221,27 @@ TOOLS: list[dict] = [
         },
     },
     {
+        "name": "pin_meal_slot",
+        "description": (
+            "TEK bir öğünü (ör. kahvaltı) haftanın 7 gününe sabitle; diğer öğünler değişmeden kalır. "
+            "Kullanıcı 'şu kahvaltıyı her gün yapıyorum/istiyorum' derse kullan. source_day_index: "
+            "beğenilen öğünün alındığı gün (0=Pazartesi..6=Pazar). slot: kahvalti/ara_ogun_1/ogle/"
+            "ara_ogun_2/aksam/gece_atistirmasi. remember=true ise gelecekteki planlarda da sabit tutulur."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slot": {
+                    "type": "string",
+                    "enum": ["kahvalti", "ara_ogun_1", "ogle", "ara_ogun_2", "aksam", "gece_atistirmasi"],
+                },
+                "source_day_index": {"type": "integer", "description": "Beğenilen öğünün olduğu gün (0-6)"},
+                "remember": {"type": "boolean", "description": "Gelecek planlarda da sabit kalsın mı"},
+            },
+            "required": ["slot", "source_day_index"],
+        },
+    },
+    {
         "name": "get_meal_plan",
         "description": "Aktif haftalık plandan bir günün öğünlerini getir. day_offset: 0=bugün, 1=yarın...",
         "input_schema": {
@@ -768,6 +789,58 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
         await build_weekly_shopping_list(session, week_start)
         day_names = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
         return f"{day_names[day_index]} menüsü haftanın 7 gününe uygulandı; alışveriş listesi güncellendi."
+
+    if name == "pin_meal_slot":
+        from app.services.shopping import build_weekly_shopping_list
+
+        slot = p["slot"]
+        source_day = int(p["source_day_index"])
+        if not 0 <= source_day <= 6:
+            return "HATA: source_day_index 0-6 olmalı."
+        today = date.today()
+        week_start = today - timedelta(days=today.weekday())
+        res = await session.execute(
+            select(MealPlan)
+            .where(MealPlan.user_id == uid, MealPlan.week_start == week_start, MealPlan.status == "active")
+            .order_by(MealPlan.id.desc())
+            .limit(1)
+        )
+        plan = res.scalar_one_or_none()
+        if not plan:
+            return "HATA: bu hafta için aktif plan yok."
+        res = await session.execute(select(PlannedMeal).where(PlannedMeal.plan_id == plan.id))
+        all_meals = list(res.scalars())
+        source = next((m for m in all_meals if m.day_index == source_day and m.slot == slot), None)
+        if not source:
+            return f"HATA: {source_day}. günde {slot} öğünü bulunamadı."
+        # Overwrite that slot on every other day with a copy of the source meal.
+        for m in all_meals:
+            if m.slot == slot and m.day_index != source_day:
+                await session.delete(m)
+        for target_day in range(7):
+            if target_day == source_day:
+                continue
+            session.add(
+                PlannedMeal(
+                    plan_id=plan.id, day_index=target_day, slot=slot,
+                    name=source.name, recipe=source.recipe, prep_minutes=source.prep_minutes,
+                    kcal=source.kcal, protein_g=source.protein_g, carb_g=source.carb_g,
+                    fat_g=source.fat_g, fiber_g=source.fiber_g, ingredients=source.ingredients,
+                    alternatives=source.alternatives, shared_with_partner=source.shared_with_partner,
+                )
+            )
+        await session.flush()
+        await build_weekly_shopping_list(session, week_start)
+        slot_tr = {"kahvalti": "kahvaltı", "ara_ogun_1": "sabah ara öğünü", "ogle": "öğle",
+                   "ara_ogun_2": "ikindi ara öğünü", "aksam": "akşam", "gece_atistirmasi": "gece atıştırması"}.get(slot, slot)
+        msg = f"'{source.name}' her günün {slot_tr} öğünü olarak sabitlendi; alışveriş listesi güncellendi."
+        if p.get("remember"):
+            session.add(MemoryNote(
+                user_id=uid, category="tercih",
+                text=f"Sabit {slot_tr}: '{source.name}' — plan üretilirken bu öğün her gün aynı kalsın.",
+            ))
+            msg += " Gelecek planlarda da sabit tutacağım."
+        return msg
 
     if name == "get_meal_plan":
         day = date.today() + timedelta(days=int(p.get("day_offset", 0)))
