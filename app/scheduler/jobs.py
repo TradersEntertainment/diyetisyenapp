@@ -209,12 +209,29 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         from app.models import WaterLog
+        from app.services.targets import get_profile
 
         facts = await daily_facts(session, user)
         target = facts["targets"]["water_ml"] or 2000
         drunk = facts["water_ml"]
         if drunk >= target * 0.9:
             return  # on track — silence is golden
+
+        profile = await get_profile(session, user.id)
+        if profile and profile.auto_water:
+            # Hands-off mode: assume they drank a glass, log it, just notify.
+            glass = 250
+            session.add(WaterLog(user_id=user.id, amount_ml=glass))
+            await _send(
+                application,
+                session,
+                user,
+                f"💧 senin adına {glass} ml su ekledim (bugün {drunk + glass}/{target} ml). "
+                "İçmediysen 'su içmedim' yaz, düzeltirim.",
+                mention=True,
+            )
+            return
+
         res = await session.execute(
             select(WaterLog)
             .where(WaterLog.user_id == user.id)

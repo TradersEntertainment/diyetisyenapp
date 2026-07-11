@@ -47,6 +47,9 @@ class Profile(Base):
     sleep_hours: Mapped[float | None]
     # Typical wake-up time; when set, reminders shift relative to it.
     wake_time: Mapped[time | None] = mapped_column(Time)
+    # When true, water reminders auto-log a glass and just notify (opt-out),
+    # instead of asking the user to confirm/tap each time.
+    auto_water: Mapped[bool] = mapped_column(default=False)
 
     # --- Health ---
     diseases: Mapped[str | None] = mapped_column(String(1000))

@@ -134,3 +134,37 @@ async def test_set_wake_time_wraps_past_midnight(session):
     by_kind = {r.kind: r.time_of_day for r in res.scalars()}
     # aksam_kontrol = 16:00 + 13h = 05:00 next day
     assert by_kind["aksam_kontrol"] == time(5, 0)
+
+
+async def test_set_auto_water_toggles_profile(session):
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import Profile, User
+
+    user = User(telegram_id=333, name="Su", onboarding_state="active")
+    session.add(user)
+    await session.flush()
+    session.add(Profile(user_id=user.id))
+    await session.flush()
+
+    r = await execute_tool(session, user, "set_auto_water", {"enabled": True})
+    assert "AÇILDI" in r
+    prof = (await session.execute(select(Profile).where(Profile.user_id == user.id))).scalar_one()
+    assert prof.auto_water is True
+
+    await execute_tool(session, user, "set_auto_water", {"enabled": False})
+    assert prof.auto_water is False
+
+
+async def test_adjust_water_negative_reverses(session):
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import User, WaterLog
+
+    user = User(telegram_id=444, name="Su2", onboarding_state="active")
+    session.add(user)
+    await session.flush()
+
+    await execute_tool(session, user, "adjust_water", {"amount_ml": -250})
+    logs = list((await session.execute(select(WaterLog).where(WaterLog.user_id == user.id))).scalars())
+    assert len(logs) == 1 and logs[0].amount_ml == -250

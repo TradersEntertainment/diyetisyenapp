@@ -327,6 +327,32 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "set_auto_water",
+        "description": (
+            "Otomatik su takibini aç/kapat. Kullanıcı 'su içtiğimi her seferinde belirtmek "
+            "istemiyorum, sen varsay' derse aç (enabled=true): su saatlerinde senin adına bardak "
+            "eklenir ve sadece bildirim gider, tıklama gerekmez. Kullanıcı 'ben söylerim/otomatik "
+            "ekleme' derse kapat."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"],
+        },
+    },
+    {
+        "name": "adjust_water",
+        "description": (
+            "Bugünkü su kaydını düzelt. Kullanıcı otomatik eklenen suyu içmediyse ('su içmedim') "
+            "negatif değerle geri al (örn. amount_ml=-250). Fazladan eklemek için pozitif kullan."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"amount_ml": {"type": "integer", "description": "Eklenecek (+) veya geri alınacak (-) ml"}},
+            "required": ["amount_ml"],
+        },
+    },
+    {
         "name": "set_wake_time",
         "description": (
             "Kullanıcının uyanma saatini kaydet. Kullanıcı ne zaman kalktığını/uyandığını söylerse "
@@ -807,6 +833,27 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             "porsiyonlar). Birkaç dakika sürer; hazır olunca tablolar gruba otomatik gelecek. "
             "Kullanıcıya bekleyeceğini söyle."
         )
+
+    if name == "set_auto_water":
+        from app.services.targets import get_profile
+
+        profile = await get_profile(session, uid)
+        if not profile:
+            return "HATA: profil bulunamadı."
+        profile.auto_water = bool(p["enabled"])
+        if profile.auto_water:
+            return (
+                "Otomatik su takibi AÇILDI. Bundan sonra su saatlerinde senin adına bardak ekleyip "
+                "sadece haber vereceğim; tıklaman gerekmeyecek. İçmediğin olursa 'su içmedim' de."
+            )
+        return "Otomatik su takibi KAPATILDI. Yine tek dokunuşluk butonlarla soracağım."
+
+    if name == "adjust_water":
+        session.add(WaterLog(user_id=uid, amount_ml=int(p["amount_ml"])))
+        ml = int(p["amount_ml"])
+        if ml < 0:
+            return f"{abs(ml)} ml su geri alındı."
+        return f"{ml} ml su eklendi."
 
     if name == "set_wake_time":
         from datetime import time as dtime
