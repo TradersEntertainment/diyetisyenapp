@@ -88,3 +88,49 @@ def test_single_meat_specific_animal_beats_generic_words():
     assert _meal_meat_category("Kıymalı Kabak Sote") == "kirmizi"
     assert _meal_meat_category("Ton Balıklı Yeşil Salata") == "balik"
     assert _meal_meat_category("Çilekli Süzme Yoğurt") is None
+
+
+async def test_set_wake_time_shifts_reminders(session):
+    from datetime import time
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import Profile, ReminderSetting, User
+
+    user = User(telegram_id=111, name="Test", onboarding_state="active")
+    session.add(user)
+    await session.flush()
+    session.add(Profile(user_id=user.id))
+    session.add(ReminderSetting(user_id=user.id, kind="ogun_ogle", time_of_day=time(12, 30)))
+    await session.flush()
+
+    result = await execute_tool(session, user, "set_wake_time", {"time": "11:00"})
+    assert "11:00" in result
+
+    res = await session.execute(select(ReminderSetting).where(ReminderSetting.user_id == user.id))
+    by_kind = {r.kind: r.time_of_day for r in res.scalars()}
+    assert by_kind["gunaydin"] == time(11, 0)
+    assert by_kind["ogun_kahvalti"] == time(11, 45)
+    assert by_kind["ogun_ogle"] == time(16, 0)   # existing row updated, not duplicated
+    assert by_kind["ogun_aksam"] == time(21, 0)
+
+    prof = await session.get(Profile, (await session.execute(select(Profile.id).where(Profile.user_id == user.id))).scalar_one())
+    assert prof.wake_time == time(11, 0)
+
+
+async def test_set_wake_time_wraps_past_midnight(session):
+    from datetime import time
+    from sqlalchemy import select
+    from app.ai.tools import execute_tool
+    from app.models import Profile, ReminderSetting, User
+
+    user = User(telegram_id=222, name="Gece", onboarding_state="active")
+    session.add(user)
+    await session.flush()
+    session.add(Profile(user_id=user.id))
+    await session.flush()
+
+    await execute_tool(session, user, "set_wake_time", {"time": "16:00"})
+    res = await session.execute(select(ReminderSetting).where(ReminderSetting.user_id == user.id))
+    by_kind = {r.kind: r.time_of_day for r in res.scalars()}
+    # aksam_kontrol = 16:00 + 13h = 05:00 next day
+    assert by_kind["aksam_kontrol"] == time(5, 0)

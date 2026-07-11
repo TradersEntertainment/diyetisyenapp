@@ -209,6 +209,7 @@ PROFILE_FIELDS = {
 DEFAULT_REMINDERS = [
     ("gunaydin", time(8, 0)),
     ("tarti", time(8, 15)),
+    ("ogun_kahvalti", time(8, 45)),
     ("su_1", time(11, 0)),
     ("su_2", time(15, 0)),
     ("su_3", time(18, 30)),

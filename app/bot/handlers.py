@@ -596,6 +596,7 @@ REMINDER_LABELS = {
     "su_1": "💧 Su (öğleden önce)",
     "su_2": "💧 Su (öğleden sonra)",
     "su_3": "💧 Su (akşam)",
+    "ogun_kahvalti": "🍳 Kahvaltı",
     "ogun_ogle": "🍲 Öğle yemeği",
     "ogun_aksam": "🍽 Akşam yemeği",
     "aksam_kontrol": "🌙 Akşam değerlendirmesi",

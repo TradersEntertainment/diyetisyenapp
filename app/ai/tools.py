@@ -327,6 +327,21 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "set_wake_time",
+        "description": (
+            "Kullanıcının uyanma saatini kaydet. Kullanıcı ne zaman kalktığını/uyandığını söylerse "
+            "çağır (örn. 'biz 11 gibi kalkıyoruz'). TÜM günlük hatırlatmalar (günaydın, kahvaltı, "
+            "öğle, akşam, su, akşam kontrolü) bu saate göre otomatik kayar."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "time": {"type": "string", "description": "Uyanma saati HH:MM (24 saat)"},
+            },
+            "required": ["time"],
+        },
+    },
+    {
         "name": "set_reminder_time",
         "description": "Bir hatırlatmanın saatini değiştir veya aç/kapat.",
         "input_schema": {
@@ -336,7 +351,7 @@ TOOLS: list[dict] = [
                     "type": "string",
                     "enum": [
                         "gunaydin", "tarti", "su_1", "su_2", "su_3",
-                        "ogun_ogle", "ogun_aksam", "aksam_kontrol",
+                        "ogun_kahvalti", "ogun_ogle", "ogun_aksam", "aksam_kontrol",
                     ],
                 },
                 "time": {"type": "string", "description": "HH:MM (24 saat)"},
@@ -791,6 +806,53 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             "Ev halkının yeni haftalık planları arka planda hazırlanıyor (ortak menü, kişiye özel "
             "porsiyonlar). Birkaç dakika sürer; hazır olunca tablolar gruba otomatik gelecek. "
             "Kullanıcıya bekleyeceğini söyle."
+        )
+
+    if name == "set_wake_time":
+        from datetime import time as dtime
+
+        from app.models import ReminderSetting
+        from app.services.targets import get_profile
+
+        try:
+            hh, mm = p["time"].split(":")
+            wake_minutes = int(hh) * 60 + int(mm)
+            if not 0 <= wake_minutes < 1440:
+                raise ValueError
+        except (ValueError, AttributeError, KeyError):
+            return "HATA: saat HH:MM biçiminde olmalı."
+
+        profile = await get_profile(session, uid)
+        if profile:
+            profile.wake_time = dtime(wake_minutes // 60, wake_minutes % 60)
+
+        # Reminder offsets from wake time (minutes).
+        offsets = {
+            "gunaydin": 0,
+            "tarti": 15,
+            "ogun_kahvalti": 45,
+            "su_1": 120,
+            "ogun_ogle": 300,
+            "su_2": 420,
+            "ogun_aksam": 600,
+            "su_3": 660,
+            "aksam_kontrol": 780,
+        }
+        res = await session.execute(select(ReminderSetting).where(ReminderSetting.user_id == uid))
+        existing = {r.kind: r for r in res.scalars()}
+        summary = {}
+        for kind, off in offsets.items():
+            total = (wake_minutes + off) % 1440
+            t = dtime(total // 60, total % 60)
+            if kind in existing:
+                existing[kind].time_of_day = t
+            else:
+                session.add(ReminderSetting(user_id=uid, kind=kind, time_of_day=t))
+            summary[kind] = t.strftime("%H:%M")
+        return (
+            f"Uyanma saati {p['time']} olarak kaydedildi ve tüm hatırlatmalar buna göre kaydırıldı. "
+            f"Kahvaltı ~{summary['ogun_kahvalti']}, öğle ~{summary['ogun_ogle']}, "
+            f"akşam ~{summary['ogun_aksam']}, akşam değerlendirmesi ~{summary['aksam_kontrol']}."
         )
 
     if name == "set_reminder_time":

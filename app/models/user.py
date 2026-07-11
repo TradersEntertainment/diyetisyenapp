@@ -45,6 +45,8 @@ class Profile(Base):
     occupation: Mapped[str | None] = mapped_column(String(120))
     daily_movement: Mapped[str | None] = mapped_column(String(255))
     sleep_hours: Mapped[float | None]
+    # Typical wake-up time; when set, reminders shift relative to it.
+    wake_time: Mapped[time | None] = mapped_column(Time)
 
     # --- Health ---
     diseases: Mapped[str | None] = mapped_column(String(1000))

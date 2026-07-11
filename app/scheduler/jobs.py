@@ -243,8 +243,8 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         return
 
     if kind.startswith("ogun_"):
-        slot = "ogle" if kind == "ogun_ogle" else "aksam"
-        slot_name = "öğle" if slot == "ogle" else "akşam"
+        _slot_map = {"ogun_kahvalti": ("kahvalti", "kahvaltı"), "ogun_ogle": ("ogle", "öğle"), "ogun_aksam": ("aksam", "akşam")}
+        slot, slot_name = _slot_map.get(kind, ("aksam", "akşam"))
         from app.models import MealLog, MealPlan, PlannedMeal
 
         today = date.today()
@@ -278,11 +278,12 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
             meal = res.scalars().first()
             if meal:
                 meal_line = f"\nPlanda: {meal.name} ({meal.kcal} kcal, P{meal.protein_g:g} g) — hazırlık ~{meal.prep_minutes} dk"
+        emoji = {"kahvalti": "🍳", "ogle": "🍲", "aksam": "🍽"}.get(slot, "🍽")
         await _send(
             application,
             session,
             user,
-            f"🍽 {slot_name} yemeği zamanı yaklaşıyor!{meal_line}\nNe yediğini bana yazmayı unutma.",
+            f"{emoji} {slot_name} vakti yaklaşıyor!{meal_line}\nNe yediğini bana yazmayı unutma.",
             mention=True,
         )
         return

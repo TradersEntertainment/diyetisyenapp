@@ -49,6 +49,8 @@ def _profile_text(profile: Profile, name: str) -> str:
         parts.append(f"Aktivite: {profile.activity_level}")
     if profile.occupation:
         parts.append(f"Meslek: {profile.occupation}")
+    if profile.wake_time:
+        parts.append(f"Uyanma saati: {profile.wake_time.strftime('%H:%M')}")
     if profile.goals:
         parts.append("Hedefler: " + ", ".join(profile.goals))
     health = []
