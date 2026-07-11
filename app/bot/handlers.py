@@ -732,8 +732,9 @@ async def cb_ayar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     setting_id = int(query.data.split(":", 1)[1])
     async with session_scope() as session:
         setting = await session.get(ReminderSetting, setting_id)
-        if setting:
-            setting.enabled = not setting.enabled
+        if not setting:
+            return await query.answer("Bu ayar artık yok 🙂")
+        setting.enabled = not setting.enabled
         text, markup = await _render_settings(session, setting.user_id)
     await query.answer("Güncellendi")
     try:

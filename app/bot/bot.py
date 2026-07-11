@@ -99,7 +99,24 @@ def create_application() -> Application:
     application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handlers.voice_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.chat_handler))
 
+    # Safety net: any unhandled exception in any handler is logged here instead
+    # of bubbling up, so a single bad update can never take the bot down.
+    application.add_error_handler(_on_error)
+
     return application
+
+
+async def _on_error(update: object, context) -> None:
+    log.exception("unhandled handler error", exc_info=context.error)
+    try:
+        from telegram import Update as _U
+
+        if isinstance(update, _U) and update.effective_chat:
+            await update.effective_chat.send_message(
+                "Ufak bir aksaklık oldu 🙈 birazdan tekrar dener misin?"
+            )
+    except Exception:
+        pass
 
 
 async def start_bot(application: Application) -> None:

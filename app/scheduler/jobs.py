@@ -106,8 +106,6 @@ async def _send(
 
 async def _send_plan_image(application: Application, session, user: User, week_start=None) -> None:
     """Post the user's weekly plan grid as a PNG."""
-    from app.services.mealplan import render_week_plan_png
-
     try:
         buf = await render_week_plan_png(session, user, week_start)
         if not buf:
@@ -181,7 +179,12 @@ async def _send_weight_chart(application: Application, session, user: User, days
 
 
 async def reminder_tick(application: Application) -> None:
-    """Runs every minute; fires reminders whose HH:MM matches the user's local time."""
+    """Runs every minute; fires reminders whose HH:MM matches the user's local time.
+
+    Each due reminder fires in its OWN session so a transient DB error on one
+    can't roll back or block the others in the same minute.
+    """
+    due: list[tuple[int, str]] = []  # (user_id, kind)
     async with session_scope() as session:
         users = await _active_users(session)
         for user in users:
@@ -194,12 +197,17 @@ async def reminder_tick(application: Application) -> None:
                 )
             )
             for setting in res.scalars():
-                if (setting.time_of_day.hour, setting.time_of_day.minute) != hhmm:
-                    continue
-                try:
-                    await _fire_reminder(application, session, user, setting.kind)
-                except Exception:
-                    log.exception("reminder %s failed for user %s", setting.kind, user.id)
+                if (setting.time_of_day.hour, setting.time_of_day.minute) == hhmm:
+                    due.append((user.id, setting.kind))
+
+    for user_id, kind in due:
+        try:
+            async with session_scope() as session:
+                user = await session.get(User, user_id)
+                if user:
+                    await _fire_reminder(application, session, user, kind)
+        except Exception:
+            log.exception("reminder %s failed for user %s", kind, user_id)
 
 
 async def _fire_reminder(application: Application, session, user: User, kind: str) -> None:
@@ -248,7 +256,6 @@ async def _fire_reminder(application: Application, session, user: User, kind: st
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         from app.models import WaterLog
-        from app.services.targets import get_profile
 
         facts = await daily_facts(session, user)
         target = facts["targets"]["water_ml"] or 2000
@@ -542,8 +549,12 @@ async def monthly_report(application: Application) -> None:
     from app.services.reports import weight_series
 
     async with session_scope() as session:
-        for user in await _active_users(session):
-            try:
+        users = await _active_users(session)
+
+    for user in users:
+        try:
+            # Per-user session so one user's DB error can't roll back another's report.
+            async with session_scope() as session:
                 weights = await weight_series(session, user.id, days=31)
                 change = round(weights[-1][1] - weights[0][1], 1) if len(weights) >= 2 else None
                 stats = await gather_weekly_stats(session, user)
@@ -562,8 +573,8 @@ async def monthly_report(application: Application) -> None:
                     header = f"🗓 Aylık Rapor — {user.name}\n\n" if user.name else "🗓 Aylık Rapor\n\n"
                     await _send(application, session, user, header + text)
                     await _send_weight_chart(application, session, user, days=90)
-            except Exception:
-                log.exception("monthly report failed for user %s", user.id)
+        except Exception:
+            log.exception("monthly report failed for user %s", user.id)
 
 
 # ------------------------------------------------------------------ backup
