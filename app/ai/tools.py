@@ -327,6 +327,60 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}},
     },
     {
+        "name": "log_lab_result",
+        "description": (
+            "Bir kan/tahlil değerini kaydet (tahlil fotoğrafındaki her satır için ayrı çağır). "
+            "panel örn: 'LDL kolesterol', 'Açlık kan şekeri', 'HbA1c', 'TSH', 'Trigliserit', 'Vitamin D'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "panel": {"type": "string"},
+                "value": {"type": "number"},
+                "unit": {"type": "string", "description": "örn. mg/dL, %, mIU/L"},
+                "taken_on": {"type": "string", "description": "Tahlil tarihi YYYY-MM-DD (biliniyorsa)"},
+            },
+            "required": ["panel", "value"],
+        },
+    },
+    {
+        "name": "get_lab_history",
+        "description": "Kaydedilmiş tahlil değerlerini getir (panel verilirse sadece o panelin geçmişi).",
+        "input_schema": {
+            "type": "object",
+            "properties": {"panel": {"type": "string"}},
+        },
+    },
+    {
+        "name": "lookup_barcode",
+        "description": (
+            "Bir ürün barkodunun besin değerlerini OpenFoodFacts'tan getir ve veritabanına ekle. "
+            "Kullanıcı barkod numarası verdiğinde veya barkod fotoğrafından okuduğunda çağır."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"code": {"type": "string", "description": "Barkod numarası"}},
+            "required": ["code"],
+        },
+    },
+    {
+        "name": "get_adherence_analysis",
+        "description": (
+            "Son 7 günün plana uyum kırılımını getir: en çok atlanan öğün, kaçamak/açlık zamanları. "
+            "Kullanıcı 'nerede takılıyorum', 'neyi beceremiyorum' diye sorunca kullan."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_dining_out_context",
+        "description": (
+            "Kullanıcı dışarıda/restoranda olduğunu söyleyip ne yiyeceğini sorunca çağır: güncel "
+            "hedef, protein tabanı, bugün kalan kalori ve 'asla/sevmem' yiyecekleri döndürür ki "
+            "hedefe uygun 2-3 seçenek önerebilesin."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "set_auto_water",
         "description": (
             "Otomatik su takibini aç/kapat. Kullanıcı 'su içtiğimi her seferinde belirtmek "
@@ -833,6 +887,120 @@ async def _dispatch(session: AsyncSession, user: User, name: str, p: dict) -> st
             "porsiyonlar). Birkaç dakika sürer; hazır olunca tablolar gruba otomatik gelecek. "
             "Kullanıcıya bekleyeceğini söyle."
         )
+
+    if name == "log_lab_result":
+        from datetime import date as _date
+
+        from app.models import LabResult
+
+        taken = None
+        if p.get("taken_on"):
+            try:
+                taken = _date.fromisoformat(p["taken_on"])
+            except ValueError:
+                taken = None
+        session.add(
+            LabResult(
+                user_id=uid, panel=p["panel"], value=float(p["value"]),
+                unit=p.get("unit"), taken_on=taken,
+            )
+        )
+        return f"Tahlil kaydedildi: {p['panel']} = {p['value']} {p.get('unit') or ''}".strip() + "."
+
+    if name == "get_lab_history":
+        from app.models import LabResult
+
+        stmt = select(LabResult).where(LabResult.user_id == uid)
+        if p.get("panel"):
+            stmt = stmt.where(LabResult.panel.ilike(f"%{p['panel']}%"))
+        stmt = stmt.order_by(LabResult.ts.desc()).limit(40)
+        rows = list((await session.execute(stmt)).scalars())
+        if not rows:
+            return "Kayıtlı tahlil bulunamadı."
+        return json.dumps(
+            [
+                {"panel": r.panel, "value": r.value, "unit": r.unit,
+                 "tarih": (r.taken_on or r.ts.date()).isoformat()}
+                for r in rows
+            ],
+            ensure_ascii=False,
+        )
+
+    if name == "lookup_barcode":
+        from app.services.foodfacts import lookup
+
+        info = await lookup(p["code"])
+        if not info or info.get("kcal") is None:
+            return (
+                "Bu barkod OpenFoodFacts'ta bulunamadı. Ürünün besin değerleri tablosunu "
+                "fotoğraflarsan değerleri elle ekleyebilirim."
+            )
+        display = " ".join(x for x in [info.get("brand"), info.get("name")] if x) or f"Ürün {p['code']}"
+        res = await session.execute(select(Food).where(Food.name_tr == display))
+        if not res.scalar_one_or_none():
+            session.add(
+                Food(
+                    name_tr=display, category="market_urun",
+                    kcal=info["kcal"] or 0, protein_g=info.get("protein_g") or 0,
+                    carb_g=info.get("carb_g") or 0, fat_g=info.get("fat_g") or 0,
+                    fiber_g=info.get("fiber_g") or 0,
+                )
+            )
+        return (
+            f"{display} (100 g): {info['kcal']} kcal, P{info.get('protein_g')} "
+            f"K{info.get('carb_g')} Y{info.get('fat_g')}. Veritabanına eklendi."
+        )
+
+    if name == "get_adherence_analysis":
+        from datetime import datetime as _dt, timezone as _tz
+
+        from app.models import HungerLog, MealLog
+        from app.services.analysis import adherence_breakdown
+
+        since = _dt.now(_tz.utc) - timedelta(days=7)
+        meals = list((await session.execute(
+            select(MealLog).where(MealLog.user_id == uid, MealLog.ts >= since)
+        )).scalars())
+        cheats = [m for m in meals if m.is_cheat]
+        hungers = list((await session.execute(
+            select(HungerLog).where(
+                HungerLog.user_id == uid, HungerLog.ts >= since, HungerLog.hunger >= 4
+            )
+        )).scalars())
+        breakdown = adherence_breakdown(
+            meals,
+            cheat_count=len(cheats),
+            cheat_hours=[m.ts.hour for m in cheats],
+            high_hunger_hours=[h.ts.hour for h in hungers],
+        )
+        return json.dumps(breakdown, ensure_ascii=False)
+
+    if name == "get_dining_out_context":
+        from app.models import MealLog
+
+        from datetime import datetime as _dt, time as _t, timezone as _tz
+
+        targets = await get_current_targets(session, uid)
+        today = date.today()
+        start = _dt.combine(today, _t.min, tzinfo=_tz.utc)
+        eaten = list((await session.execute(
+            select(MealLog).where(MealLog.user_id == uid, MealLog.ts >= start)
+        )).scalars())
+        eaten_kcal = sum(m.kcal or 0 for m in eaten)
+        res = await session.execute(
+            select(FoodPreference).where(
+                FoodPreference.user_id == uid, FoodPreference.level.in_(["asla", "sevmem"])
+            )
+        )
+        avoid = [fp.name for fp in res.scalars()]
+        payload = {
+            "hedef_kcal": targets.kcal if targets else None,
+            "protein_hedefi_g": targets.protein_g if targets else None,
+            "bugun_yenen_kcal": eaten_kcal,
+            "kalan_kcal": (targets.kcal - eaten_kcal) if targets else None,
+            "kacinilacaklar": avoid,
+        }
+        return json.dumps(payload, ensure_ascii=False)
 
     if name == "set_auto_water":
         from app.services.targets import get_profile

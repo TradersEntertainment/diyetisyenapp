@@ -1,4 +1,5 @@
 from app.models.conversation import AppSetting, ConversationMessage, MemoryNote
+from app.models.health import LabResult
 from app.models.nutrition import (
     Food,
     MealLog,
@@ -32,6 +33,7 @@ __all__ = [
     "Food",
     "FoodPreference",
     "HungerLog",
+    "LabResult",
     "MealLog",
     "MealPlan",
     "MealSlot",

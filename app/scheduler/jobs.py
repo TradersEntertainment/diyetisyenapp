@@ -122,6 +122,45 @@ async def _send_plan_image(application: Application, session, user: User, week_s
         log.exception("plan image send failed for user %s", user.id)
 
 
+async def _send_challenge_note(application: Application, session, user: User, is_group: bool) -> None:
+    """A short 'what challenged you this week' note from the adherence breakdown."""
+    import json
+
+    from app.ai.dietitian import SILENT_SENTINEL, generate_message
+    from app.models import HungerLog, MealLog
+    from app.services.analysis import adherence_breakdown
+
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=7)
+        meals = list((await session.execute(
+            select(MealLog).where(MealLog.user_id == user.id, MealLog.ts >= since)
+        )).scalars())
+        if len(meals) < 3:
+            return  # not enough data to say anything useful
+        cheats = [m for m in meals if m.is_cheat]
+        hungers = list((await session.execute(
+            select(HungerLog).where(
+                HungerLog.user_id == user.id, HungerLog.ts >= since, HungerLog.hunger >= 4
+            )
+        )).scalars())
+        breakdown = adherence_breakdown(
+            meals, cheat_count=len(cheats),
+            cheat_hours=[m.ts.hour for m in cheats],
+            high_hunger_hours=[h.ts.hour for h in hungers],
+        )
+        text = await generate_message(
+            session, user,
+            "Aşağıda bu haftanın plana uyum kırılımı var. Bir cümleyle 'bu hafta seni en çok "
+            "zorlayan' şeyi söyle ve 1-2 uygulanabilir, nazik öneri ver. Suçlama yok. Kısa tut.\n\n"
+            + json.dumps(breakdown, ensure_ascii=False),
+            group_mode=is_group,
+        )
+        if text and SILENT_SENTINEL not in text:
+            await _send(application, session, user, "💡 " + text)
+    except Exception:
+        log.exception("challenge note failed for user %s", user.id)
+
+
 async def _send_weight_chart(application: Application, session, user: User, days: int) -> None:
     """Post the user's weight trend as a PNG below a report message."""
     from app.bot.charts import line_chart
@@ -456,6 +495,7 @@ async def weekly_review(application: Application) -> None:
                 header = f"📋 Haftalık Değerlendirme — {user.name}\n\n" if user.name else "📋 Haftalık Değerlendirme\n\n"
                 await _send(application, session, user, header + message)
                 await _send_weight_chart(application, session, user, days=30)
+                await _send_challenge_note(application, session, user, is_group)
             except Exception:
                 log.exception("weekly review failed for user %s", user.id)
 

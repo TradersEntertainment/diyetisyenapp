@@ -66,6 +66,57 @@ def water_retention_suspected(series: list[tuple[date, float]], spike_pct: float
     return False
 
 
+SLOT_LABELS_TR = {
+    "kahvalti": "kahvaltı",
+    "ara_ogun_1": "ara öğün (sabah)",
+    "ogle": "öğle",
+    "ara_ogun_2": "ara öğün (öğleden sonra)",
+    "aksam": "akşam",
+    "gece_atistirmasi": "gece atıştırması",
+}
+_WEEKDAY_TR = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"]
+
+
+def adherence_breakdown(meal_logs, cheat_count: int, cheat_hours, high_hunger_hours) -> dict:
+    """Where the week was hard, computed deterministically for the AI to narrate.
+
+    meal_logs: iterable of objects with .slot and .ts (aware datetime).
+    cheat_hours / high_hunger_hours: iterables of int hour-of-day.
+    """
+    from collections import Counter
+
+    slot_counts = Counter(m.slot for m in meal_logs if m.slot)
+    logged_slots = [s for s in SLOT_LABELS_TR if slot_counts.get(s, 0) > 0]
+    # Which planned slots are most often NOT logged (7 days expected each).
+    missed = sorted(
+        ((s, 7 - min(slot_counts.get(s, 0), 7)) for s in SLOT_LABELS_TR),
+        key=lambda x: x[1], reverse=True,
+    )
+    worst_slot = next((SLOT_LABELS_TR[s] for s, miss in missed if miss >= 3), None)
+
+    def peak(hours):
+        c = Counter(h for h in hours)
+        if not c:
+            return None
+        hour, _ = c.most_common(1)[0]
+        if 5 <= hour < 11:
+            return "sabah"
+        if 11 <= hour < 16:
+            return "öğle civarı"
+        if 16 <= hour < 21:
+            return "akşamüstü"
+        return "gece"
+
+    return {
+        "toplam_ogun_kaydi": sum(slot_counts.values()),
+        "kaydedilen_ogunler": [SLOT_LABELS_TR[s] for s in logged_slots],
+        "en_cok_atlanan_ogun": worst_slot,
+        "kacamak_sayisi": cheat_count,
+        "kacamak_zamani": peak(cheat_hours),
+        "en_ac_hissedilen_zaman": peak(high_hunger_hours),
+    }
+
+
 def adherence_score(actual: float, target: float) -> int:
     """0-100. Meeting or exceeding target = 100 (no punishment for overshooting water etc.)."""
     if target <= 0:

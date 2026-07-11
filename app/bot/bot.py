@@ -96,6 +96,7 @@ def create_application() -> Application:
         MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, handlers.on_new_chat_members)
     )
     application.add_handler(MessageHandler(filters.PHOTO, handlers.photo_handler))
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handlers.voice_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.chat_handler))
 
     return application

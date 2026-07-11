@@ -155,6 +155,12 @@ async def _plan_memory_block(session: AsyncSession, user_id: int) -> str:
     return await _memory_text(session, user_id, limit=20)
 
 
+async def _labs_block(session: AsyncSession, user_id: int) -> str:
+    from app.ai.context import _labs_text
+
+    return await _labs_text(session, user_id)
+
+
 async def _recent_meals_block(session: AsyncSession, user_id: int, days: int = 21) -> str:
     from datetime import datetime, timezone
 
@@ -322,6 +328,9 @@ Ara öğün, tatlı ihtiyacı ve gece atıştırmalarında bu ürünlere ÖNCEL�
 
 ### Hafıza notları (plan tercihlerini MUTLAKA yansıt: tek-tip menü isteği, öğün düzeni vb.)
 {await _plan_memory_block(session, user.id) or "(not yok)"}
+
+### Son tahlil değerleri (varsa stratejiye kat: yüksek LDL→doymuş yağ↓, yüksek şeker/HbA1c→düşük glisemik)
+{await _labs_block(session, user.id) or "(tahlil kaydı yok)"}
 
 ### Besin veritabanından örnek değerler (porsiyon hesaplarında kullan)
 {await _foods_block(session)}

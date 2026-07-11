@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     # group message and persisted in the DB; set to force a specific group.
     group_chat_id: int | None = None
 
+    # Speech-to-text for voice messages (Groq Whisper preferred, OpenAI fallback)
+    groq_api_key: str = ""
+    openai_api_key: str = ""
+    stt_model: str = "whisper-large-v3"
+
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"

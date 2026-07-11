@@ -120,6 +120,26 @@ async def _memory_text(session: AsyncSession, user_id: int, limit: int = 40) -> 
     return "\n".join(f"- [{n.category}] {n.text}" for n in reversed(notes))
 
 
+async def _labs_text(session: AsyncSession, user_id: int) -> str:
+    """Latest value per lab panel, so the dietitian tailors nutrition to them."""
+    from app.models import LabResult
+
+    res = await session.execute(
+        select(LabResult).where(LabResult.user_id == user_id).order_by(LabResult.ts.desc()).limit(60)
+    )
+    latest: dict[str, LabResult] = {}
+    for r in res.scalars():
+        if r.panel not in latest:
+            latest[r.panel] = r
+    if not latest:
+        return ""
+    lines = []
+    for r in latest.values():
+        d = (r.taken_on or r.ts.date()).isoformat()
+        lines.append(f"- {r.panel}: {r.value:g} {r.unit or ''} ({d})".replace("  ", " "))
+    return "\n".join(lines)
+
+
 async def _today_plan_text(session: AsyncSession, user_id: int, today: date) -> str:
     week_start = today - timedelta(days=today.weekday())
     res = await session.execute(
@@ -233,6 +253,10 @@ async def build_user_context(session: AsyncSession, user: User) -> str:
     memory = await _memory_text(session, user.id)
     if memory:
         sections.append("## Hafıza Notları\n" + memory)
+
+    labs = await _labs_text(session, user.id)
+    if labs:
+        sections.append("## Son Tahlil Değerleri\n" + labs)
 
     partner = await _partner_brief(session, user, today)
     if partner:

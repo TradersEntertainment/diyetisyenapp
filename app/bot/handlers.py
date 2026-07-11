@@ -552,6 +552,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- ÜRÜN ETİKETİ / besin değerleri tablosu / ambalaj fotoğrafıysa: değerleri oku, add_food ile "
         "veritabanına ekle (SDM Kalibra ürünüyse category='kalibra_urun') ve kaydettiğini söyle — "
         "bu ürünler haftalık planlara otomatik girer.\n"
+        "- BARKOD görünüyorsa: numarayı oku ve lookup_barcode ile besin değerlerini getirip ekle.\n"
+        "- TAHLİL / LABORATUVAR sonucu ise: her önemli değeri (kolesterol, şeker, HbA1c, TSH, "
+        "trigliserit, vitamin D vb.) log_lab_result ile ayrı ayrı kaydet, kısaca özetle; anormal "
+        "değer varsa doktora yönlendir (teşhis KOYMA) ve beslenme tarafını nasıl uyarlayacağını söyle.\n"
+        "- RESTORAN MENÜSÜ fotoğrafıysa: get_dining_out_context çağır, menüden hedefe uyan 2-3 "
+        "seçeneği gerekçesiyle öner (kayıt yapma, sadece öner).\n"
+        "- MARKET FİŞİ ise: gıda kalemlerini oku, işine yarayanları add_food/update_food_preference "
+        "ile değerlendir ve kısaca özetle.\n"
         "- VÜCUT/İLERLEME fotoğrafıysa: kısa, motive edici bir şey yaz ve mesajının sonuna "
         "aynen şunu ekle: [FOTO_KAYDET]\n"
         "- Başka bir şeyse kısaca doğal biçimde yorumla."
@@ -581,6 +589,52 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if reply:
         for i in range(0, len(reply), 4000):
             await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
+
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Transcribe a voice/audio message and run it through the normal chat flow."""
+    user = await get_user(update.effective_user.id)
+    if msg := _require_active(user):
+        return await update.message.reply_text(msg)
+
+    from app.ai.stt import stt_available, transcribe
+
+    if not stt_available():
+        return await update.message.reply_text(
+            "Sesli mesajı şu an yazıya dökemiyorum (ses servisi ayarlı değil). Yazar mısın? 🙏"
+        )
+    group_mode = _is_group(update)
+    await update.effective_chat.send_action(ChatAction.TYPING)
+    try:
+        voice = update.message.voice or update.message.audio
+        tg_file = await voice.get_file()
+        data = bytes(await tg_file.download_as_bytearray())
+        text = await transcribe(data)
+    except Exception:
+        log.exception("voice download/transcribe failed")
+        text = None
+    if not text:
+        return await update.message.reply_text(
+            "Sesini net anlayamadım 🙈 Bir daha dener misin ya da yazar mısın?"
+        )
+
+    from app.ai.dietitian import SILENT_SENTINEL, chat
+
+    try:
+        async with session_scope() as session:
+            res = await session.execute(select(User).where(User.telegram_id == update.effective_user.id))
+            db_user = res.scalar_one()
+            reply = await chat(session, db_user, text, group_mode=group_mode)
+    except Exception:
+        log.exception("voice chat failed")
+        reply = "Bir aksaklık oldu, birazdan tekrar dener misin? 🙏"
+    if SILENT_SENTINEL in reply and len(reply.strip()) <= len(SILENT_SENTINEL) + 4:
+        return
+    # Show a short transcript so they can see how the voice was understood.
+    if len(text) <= 200:
+        await update.message.reply_text(f"🎙 _{text}_", parse_mode="Markdown", do_quote=group_mode)
+    for i in range(0, len(reply), 4000):
+        await update.message.reply_text(reply[i : i + 4000], do_quote=group_mode)
 
 
 async def cmd_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
